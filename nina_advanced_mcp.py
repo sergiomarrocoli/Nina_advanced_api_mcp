@@ -19,6 +19,9 @@ ENV_IMAGE_SAVE_DIR = 'IMAGE_SAVE_DIR'
 # Default values
 DEFAULT_NINA_HOST = 'localhost'
 DEFAULT_NINA_PORT = 1888
+CAPTURE_ATTEMPTS = 3       # a capture that saves no image is tried again, this many times in all
+CAPTURE_SAVE_WAIT_S = 6    # after NINA says it is done, how long to wait for the frame to be listed in its image history
+SLEW_TIMEOUT_S = 300  # a slew that waits for the mount can take far longer than the 10 s session limit
 DEFAULT_LOG_LEVEL = 'INFO'
 DEFAULT_IMAGE_SAVE_DIR = str(Path('~/Desktop/NINA_Images').expanduser())
 
@@ -193,15 +196,21 @@ class NinaAPIClient:
             self.session = None
         self._connected = False
 
-    async def _send_request(self, method: str, endpoint: str, data: Optional[Dict] = None, handle_image_stream: bool = False) -> Dict[str, Any]:
-        """Send a request to the NINA API"""
+    async def _send_request(self, method: str, endpoint: str, data: Optional[Dict] = None, handle_image_stream: bool = False,
+                            timeout: Optional[float] = None) -> Dict[str, Any]:
+        """Send a request to the NINA API.
+
+        `timeout` (seconds) replaces the session's 10 s limit for this request; use it for calls that wait
+        for equipment, such as a slew that takes longer than 10 s.
+        """
         if not self.session:
             raise ConnectionError("HTTP connection not established")
 
         url = f"http://{self.host}:{self.port}/v2/api/{endpoint}"
         try:
             logger.debug(f"Sending {method} request to {url}")
-            async with self.session.request(method, url, json=data) as response:
+            options = {"timeout": aiohttp.ClientTimeout(total=timeout)} if timeout else {}
+            async with self.session.request(method, url, json=data, **options) as response:
                 # Check if this is an image stream response
                 content_type = response.headers.get('Content-Type', '')
                 if handle_image_stream and 'image/' in content_type:
@@ -1119,6 +1128,44 @@ async def nina_set_binning(input: CameraBinningInput) -> Dict[str, Any]:
     except Exception as e:
         return create_error_response("NINACameraError", str(e))
 
+async def _image_count(client: "NinaAPIClient") -> Optional[int]:
+    """Number of images in NINA's image history, or None if it cannot be read."""
+    try:
+        count = (await client._send_request("GET", "image-history?count=true")).get("Response")
+    except Exception:
+        return None
+    return count if isinstance(count, int) else None
+
+
+async def _capture_and_confirm(client: "NinaAPIClient", endpoint: str, timeout: float) -> Dict[str, Any]:
+    """Run a capture and only report success once the image count in NINA's image history has gone up.
+
+    The plugin's own wait sometimes answers "Unknown error" and saves nothing, and a capture started while the
+    camera is busy fails at random, so a capture that saved nothing is tried again.
+    """
+    problem = "no new image appeared in NINA's image history"
+    for attempt in range(CAPTURE_ATTEMPTS):
+        if attempt:
+            await asyncio.sleep(2)
+        before = await _image_count(client)
+        try:
+            result = await client._send_request("GET", endpoint, timeout=timeout)
+        except NinaError as e:
+            problem = str(e)
+            continue
+        if before is None:  # cannot count images: trust NINA's own answer
+            return result
+        deadline = time.monotonic() + CAPTURE_SAVE_WAIT_S
+        while True:
+            count = await _image_count(client)
+            if count is not None and count > before:
+                return result
+            if time.monotonic() >= deadline:
+                break
+            await asyncio.sleep(0.5)
+    return {"Success": False, "Error": f"No image was saved after {CAPTURE_ATTEMPTS} attempts: {problem}", "StatusCode": 500}
+
+
 @mcp.tool()
 async def nina_capture_image(input: CameraCaptureInput) -> Dict[str, Any]:
     """Capture an image with NINA astronomy software.
@@ -1131,11 +1178,10 @@ async def nina_capture_image(input: CameraCaptureInput) -> Dict[str, Any]:
        - Supports JPEG (quality 1-100) or PNG (quality=-1) format
        - Image is also saved by NINA in full resolution
        
-    2. Background capture mode (input.download=False):
-       - Starts the capture and returns immediately
-       - Does not wait for completion
-       - Image is saved by NINA in full resolution
-       - Useful for long exposures
+    2. Save-only mode (input.download=False):
+       - Waits for the capture to complete and for the image to appear in NINA's image history
+       - Retries a capture that saved nothing (up to 3 attempts in all) and returns an error if it still fails
+       - Image is saved by NINA in full resolution; nothing is downloaded
     """
     try:
         client = await get_client()
@@ -1187,7 +1233,7 @@ async def nina_capture_image(input: CameraCaptureInput) -> Dict[str, Any]:
                 params.append(f"quality={input.quality}")
         else:
             params.append("omitImage=true")  # Don't return image data
-            params.append("waitForResult=false")  # Don't wait for completion
+            params.append("waitForResult=true")  # Wait, so success can be checked against the image history
 
         # Build the endpoint
         endpoint = "equipment/camera/capture"
@@ -1197,7 +1243,10 @@ async def nina_capture_image(input: CameraCaptureInput) -> Dict[str, Any]:
         logger.info(f"Sending capture request to endpoint: {endpoint}")
 
         try:
-            result = await client._send_request("GET", endpoint, handle_image_stream=input.download)
+            if input.download:
+                result = await client._send_request("GET", endpoint, handle_image_stream=True)
+            else:
+                result = await _capture_and_confirm(client, endpoint, total_timeout)
             
             # For successful capture
             if result.get("Success", False):
@@ -1770,8 +1819,8 @@ async def nina_slew_mount(input: MountSlewInput) -> Dict[str, Any]:
         # Build the endpoint URL with correct parameters
         endpoint = f"equipment/mount/slew?ra={ra_degrees}&dec={input.dec}&waitForResult={str(input.wait_for_completion).lower()}"
 
-        # Send the slew command
-        result = await client._send_request("GET", endpoint)
+        # Send the slew command; when waiting for it, allow the whole slew, not just 10 s
+        result = await client._send_request("GET", endpoint, timeout=SLEW_TIMEOUT_S if input.wait_for_completion else None)
         
         if not result.get("Success", False):
             return create_error_response(
