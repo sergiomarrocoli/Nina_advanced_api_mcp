@@ -19,6 +19,7 @@ ENV_IMAGE_SAVE_DIR = 'IMAGE_SAVE_DIR'
 # Default values
 DEFAULT_NINA_HOST = 'localhost'
 DEFAULT_NINA_PORT = 1888
+SLEW_TIMEOUT_S = 300  # a slew that waits for the mount can take far longer than the 10 s session limit
 DEFAULT_LOG_LEVEL = 'INFO'
 DEFAULT_IMAGE_SAVE_DIR = str(Path('~/Desktop/NINA_Images').expanduser())
 
@@ -193,15 +194,21 @@ class NinaAPIClient:
             self.session = None
         self._connected = False
 
-    async def _send_request(self, method: str, endpoint: str, data: Optional[Dict] = None, handle_image_stream: bool = False) -> Dict[str, Any]:
-        """Send a request to the NINA API"""
+    async def _send_request(self, method: str, endpoint: str, data: Optional[Dict] = None, handle_image_stream: bool = False,
+                            timeout: Optional[float] = None) -> Dict[str, Any]:
+        """Send a request to the NINA API.
+
+        `timeout` (seconds) replaces the session's 10 s limit for this request; use it for calls that wait
+        for equipment, such as a slew that takes longer than 10 s.
+        """
         if not self.session:
             raise ConnectionError("HTTP connection not established")
 
         url = f"http://{self.host}:{self.port}/v2/api/{endpoint}"
         try:
             logger.debug(f"Sending {method} request to {url}")
-            async with self.session.request(method, url, json=data) as response:
+            options = {"timeout": aiohttp.ClientTimeout(total=timeout)} if timeout else {}
+            async with self.session.request(method, url, json=data, **options) as response:
                 # Check if this is an image stream response
                 content_type = response.headers.get('Content-Type', '')
                 if handle_image_stream and 'image/' in content_type:
@@ -1770,8 +1777,8 @@ async def nina_slew_mount(input: MountSlewInput) -> Dict[str, Any]:
         # Build the endpoint URL with correct parameters
         endpoint = f"equipment/mount/slew?ra={ra_degrees}&dec={input.dec}&waitForResult={str(input.wait_for_completion).lower()}"
 
-        # Send the slew command
-        result = await client._send_request("GET", endpoint)
+        # Send the slew command; when waiting for it, allow the whole slew, not just 10 s
+        result = await client._send_request("GET", endpoint, timeout=SLEW_TIMEOUT_S if input.wait_for_completion else None)
         
         if not result.get("Success", False):
             return create_error_response(
