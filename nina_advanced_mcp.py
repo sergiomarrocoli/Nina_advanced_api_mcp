@@ -3000,7 +3000,7 @@ async def nina_get_version(input: ApplicationVersionInput) -> Dict[str, Any]:
                 {"StatusCode": 401}
             )
 
-        result = await client._send_request("GET", "application/version")
+        result = await client._send_request("GET", "version")
         return {
             "Success": True,
             "Message": "Version information retrieved successfully",
