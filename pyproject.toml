@@ -1,0 +1,30 @@
+# Packaging for the NINA MCP benchmark (sergiomarrocoli/NINA-MCP-model-benchmarking). Not part of the upstream
+# fixes: this branch is upstream plus those fixes, laid out as the package the PyPI release has
+# (nina_advanced_mcp/__init__.py), so `pip install git+https://...@<commit>` replaces nina_advanced_mcp 0.1.0.
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nina_advanced_mcp"
+version = "0.1.0+benchmark.1"
+description = "NINA Advanced API MCP server (PaDev1/Nina_advanced_api_mcp) with the benchmark's fixes"
+requires-python = ">=3.10"
+dependencies = [
+    "fastmcp>=0.1.0",
+    "fastapi>=0.95.0",
+    "uvicorn>=0.22.0",
+    "pydantic>=2.0.0",
+    "aiohttp>=3.8.0",
+    "python-dotenv>=1.0.0",
+    "python-dateutil>=2.8.2",
+    "pytz>=2023.3",
+    "structlog>=23.1.0",
+    "typing-extensions>=4.5.0",
+]
+
+[tool.setuptools]
+packages = ["nina_advanced_mcp"]
+
+[tool.setuptools.package-data]
+nina_advanced_mcp = ["nina_help.json"]
