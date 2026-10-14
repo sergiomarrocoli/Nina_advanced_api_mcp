@@ -20,6 +20,7 @@ ENV_IMAGE_SAVE_DIR = 'IMAGE_SAVE_DIR'
 DEFAULT_NINA_HOST = 'localhost'
 DEFAULT_NINA_PORT = 1888
 CAPTURE_ATTEMPTS = 3       # a capture that saves no image is tried again, this many times in all
+CAPTURE_RETRY_PAUSE_S = 2   # pause before trying a capture again
 CAPTURE_SAVE_WAIT_S = 6    # after NINA says it is done, how long to wait for the frame to be listed in its image history
 SLEW_TIMEOUT_S = 300  # a slew that waits for the mount can take far longer than the 10 s session limit
 DEFAULT_LOG_LEVEL = 'INFO'
@@ -1146,7 +1147,7 @@ async def _capture_and_confirm(client: "NinaAPIClient", endpoint: str, timeout: 
     problem = "no new image appeared in NINA's image history"
     for attempt in range(CAPTURE_ATTEMPTS):
         if attempt:
-            await asyncio.sleep(2)
+            await asyncio.sleep(CAPTURE_RETRY_PAUSE_S)
         before = await _image_count(client)
         try:
             result = await client._send_request("GET", endpoint, timeout=timeout)
