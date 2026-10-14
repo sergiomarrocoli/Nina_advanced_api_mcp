@@ -463,6 +463,11 @@ class MountSlewInput(BaseModel):
     dec: float  # Declination in degrees
     wait_for_completion: Optional[bool] = True  # Whether to wait for the slew to complete
 
+class MountSyncInput(BaseModel):
+    """Input model for syncing the mount"""
+    ra: Optional[float] = None   # Right Ascension in hours; leave out (with dec) to plate solve and sync
+    dec: Optional[float] = None  # Declination in degrees
+
 class MountParkPositionInput(BaseModel):
     ra: float
     dec: float
@@ -1796,6 +1801,57 @@ async def nina_slew_mount(input: MountSlewInput) -> Dict[str, Any]:
         return {
             "Success": True,
             "Message": message,
+            "Details": result,
+            "Type": "NINA_API"
+        }
+
+    except Exception as e:
+        return create_error_response("NINAMountError", str(e))
+
+@mcp.tool()
+async def nina_sync_mount(input: MountSyncInput) -> Dict[str, Any]:
+    """Sync the mount in NINA astronomy software: tell it where it is really pointing.
+
+    With coordinates, the mount is told it is pointing there. With no coordinates, NINA takes a plate-solved
+    image and syncs the mount to what it sees, which corrects a mount whose reported position is wrong.
+    Syncing does not move the mount.
+
+    Args:
+        input: MountSyncInput containing:
+            ra: Optional, Right Ascension in hours (0-24); give both ra and dec or neither
+            dec: Optional, Declination in degrees (-90 to +90)
+
+    Returns:
+        Dict containing the success status and a message.
+    """
+    try:
+        client = await get_client()
+        if not client._connected:
+            return create_error_response(
+                "NINAMountError",
+                "Not connected to NINA server. Please connect first using nina_connect.",
+                {"StatusCode": 401}
+            )
+
+        if (input.ra is None) != (input.dec is None):
+            return create_error_response(
+                "NINAMountError",
+                "Give both ra and dec to sync to coordinates, or neither to plate solve and sync",
+                {"StatusCode": 400}
+            )
+        endpoint = "equipment/mount/sync"
+        if input.ra is not None:
+            if not 0 <= input.ra <= 24:
+                return create_error_response("NINAMountError", "Right Ascension must be between 0 and 24 hours", {"StatusCode": 400})
+            if not -90 <= input.dec <= 90:
+                return create_error_response("NINAMountError", "Declination must be between -90 and +90 degrees", {"StatusCode": 400})
+            endpoint += f"?ra={input.ra * 15.0}&dec={input.dec}"  # the plugin takes degrees
+
+        # Without coordinates NINA takes and solves an image first, which can take a while
+        result = await client._send_request("GET", endpoint, timeout=SLEW_TIMEOUT_S)
+        return {
+            "Success": True,
+            "Message": "Mount synced to the given coordinates" if input.ra is not None else "Mount synced to the plate solved position",
             "Details": result,
             "Type": "NINA_API"
         }
