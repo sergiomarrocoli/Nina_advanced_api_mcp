@@ -7,7 +7,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nina_advanced_mcp"
-version = "0.1.0+benchmark.1"
+version = "0.1.0+benchmark.2"
 description = "NINA Advanced API MCP server (PaDev1/Nina_advanced_api_mcp) with the benchmark's fixes"
 requires-python = ">=3.10"
 dependencies = [
