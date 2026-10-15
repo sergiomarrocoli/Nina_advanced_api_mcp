@@ -20,6 +20,7 @@ ENV_IMAGE_SAVE_DIR = 'IMAGE_SAVE_DIR'
 DEFAULT_NINA_HOST = 'localhost'
 DEFAULT_NINA_PORT = 1888
 SLEW_TIMEOUT_S = 300  # a slew that waits for the mount can take far longer than the 10 s session limit
+GUIDER_TIMEOUT_S = 300  # starting guiding waits for calibration (about 100 s); calibrating alone takes about 60 s
 DEFAULT_LOG_LEVEL = 'INFO'
 DEFAULT_IMAGE_SAVE_DIR = str(Path('~/Desktop/NINA_Images').expanduser())
 
@@ -2901,7 +2902,7 @@ async def nina_start_guiding(calibrate: bool = False) -> Dict[str, Any]:
         endpoint = "equipment/guider/start"
         if calibrate:
             endpoint += "?calibrate=true"
-        result = await client._send_request("GET", endpoint)
+        result = await client._send_request("GET", endpoint, timeout=GUIDER_TIMEOUT_S)
         return {
             "Success": True,
             "Message": "Guiding started successfully",
@@ -2946,7 +2947,7 @@ async def nina_calibrate_guider() -> Dict[str, Any]:
     """Calibrate the guider without starting guiding."""
     try:
         client = await get_client()
-        result = await client._send_request("GET", "equipment/guider/calibrate")
+        result = await client._send_request("GET", "equipment/guider/calibrate", timeout=GUIDER_TIMEOUT_S)
         return {
             "Success": True,
             "Message": "Guider calibration started successfully",
