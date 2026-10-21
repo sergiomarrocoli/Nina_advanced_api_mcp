@@ -35,13 +35,15 @@ IMAGE_SAVE_DIR = str(Path(os.getenv(ENV_IMAGE_SAVE_DIR, DEFAULT_IMAGE_SAVE_DIR))
 
 # Now import everything else
 import asyncio
+import inspect
 import logging
+import re
 import sys
 import json
 import time
 from datetime import datetime
 import base64
-from typing import Dict, Any, Optional, List, Union, Callable, Literal
+from typing import Dict, Any, Optional, List, Union, Callable, Literal, Annotated
 from fastmcp import FastMCP
 from pydantic import BaseModel, Field
 from enum import Enum
@@ -156,6 +158,45 @@ mcp = FastMCP(
     instructions="Model Context Provider for N.I.N.A. astrophotography software using Advanced API",
     version="0.1.0"
 )
+
+def tool():
+    """Register a tool, taking the arguments flat.
+
+    The tool functions take one pydantic model, `input`, so FastMCP publishes one `input` object that holds the
+    real arguments. Models often send the arguments flat instead and then fail validation. This publishes the
+    model's fields as the tool's own arguments and builds the model from them before calling the function.
+    """
+    def register(fn):
+        params = list(inspect.signature(fn).parameters.values())
+        model = params[0].annotation if len(params) == 1 and params[0].name == "input" else None
+        if not (isinstance(model, type) and issubclass(model, BaseModel)):
+            return mcp.tool()(fn)
+
+        flat_params = []
+        for name, info in model.model_fields.items():
+            default = inspect.Parameter.empty if info.is_required() else info.get_default(call_default_factory=True)
+            annotation = Annotated[(info.annotation, *info.metadata, Field(description=info.description))]
+            flat_params.append(inspect.Parameter(name, inspect.Parameter.KEYWORD_ONLY, default=default, annotation=annotation))
+
+        async def flat(**kwargs):
+            return await fn(model(**kwargs))
+
+        flat.__name__ = fn.__name__
+        flat.__qualname__ = fn.__qualname__
+        flat.__module__ = fn.__module__
+        doc = inspect.cleandoc(fn.__doc__ or "")
+        # FastMCP publishes only a docstring's first paragraph as the description and used to put the argument
+        # notes on `input`; with no `input` left, add them to the description.
+        notes = re.search(r"^Args:\s*\n\s*input: \w+ containing:\s*\n(.*?)(?:\n\s*\n|\Z)", doc, flags=re.M | re.S)
+        description = doc.split("\n\n")[0]
+        if notes:
+            description += "\n\nArguments:\n" + inspect.cleandoc(notes.group(1))
+        flat.__doc__ = doc
+        flat.__signature__ = inspect.Signature(flat_params, return_annotation=inspect.signature(fn).return_annotation)
+        flat.__annotations__ = {p.name: p.annotation for p in flat_params} | {"return": flat.__signature__.return_annotation}
+        return mcp.tool(description=description)(flat)
+    return register
+
 
 class ImageType(str, Enum):
     """Valid image types for camera capture"""
@@ -514,7 +555,7 @@ async def get_client() -> NinaAPIClient:
     return nina_client
 
 # Filter Wheel Tools
-@mcp.tool()
+@tool()
 async def nina_connect_filterwheel(input: FilterWheelConnectInput) -> Dict[str, Any]:
     """Connect to a filter wheel device in NINA astronomy software.
     
@@ -555,7 +596,7 @@ async def nina_connect_filterwheel(input: FilterWheelConnectInput) -> Dict[str, 
     except Exception as e:
         return create_error_response("NINAFilterWheelError", str(e))
 
-@mcp.tool()
+@tool()
 async def nina_disconnect_filterwheel() -> Dict[str, Any]:
     """Disconnect the filter wheel from NINA astronomy software.
     
@@ -587,7 +628,7 @@ async def nina_disconnect_filterwheel() -> Dict[str, Any]:
     except Exception as e:
         return create_error_response("NINAFilterWheelError", str(e))
 
-@mcp.tool()
+@tool()
 async def nina_list_filterwheel_devices() -> Dict[str, Any]:
     """List available filter wheel devices in NINA astronomy software.
     
@@ -620,7 +661,7 @@ async def nina_list_filterwheel_devices() -> Dict[str, Any]:
     except Exception as e:
         return create_error_response("NINAFilterWheelError", str(e))
 
-@mcp.tool()
+@tool()
 async def nina_rescan_filterwheel_devices() -> Dict[str, Any]:
     """Rescan for filter wheel devices in NINA astronomy software.
     
@@ -653,7 +694,7 @@ async def nina_rescan_filterwheel_devices() -> Dict[str, Any]:
     except Exception as e:
         return create_error_response("NINAFilterWheelError", str(e))
 
-@mcp.tool()
+@tool()
 async def nina_get_filterwheel_info() -> Dict[str, Any]:
     """Get filter wheel information from NINA astronomy software.
     
@@ -686,7 +727,7 @@ async def nina_get_filterwheel_info() -> Dict[str, Any]:
     except Exception as e:
         return create_error_response("NINAFilterWheelError", str(e))
 
-@mcp.tool()
+@tool()
 async def nina_change_filter(input: FilterChangeInput) -> Dict[str, Any]:
     """Change to a specific filter using the NINA astronomy software filter wheel.
     
@@ -722,7 +763,7 @@ async def nina_change_filter(input: FilterChangeInput) -> Dict[str, Any]:
     except Exception as e:
         return create_error_response("NINAFilterWheelError", str(e))
 
-@mcp.tool()
+@tool()
 async def nina_get_filter_info(input: FilterInfoInput) -> Dict[str, Any]:
     """Get information about a specific filter in the NINA astronomy software filter wheel.
     
@@ -760,7 +801,7 @@ async def nina_get_filter_info(input: FilterInfoInput) -> Dict[str, Any]:
         return create_error_response("NINAFilterWheelError", str(e))
 
 # Camera Tools
-@mcp.tool()
+@tool()
 async def nina_connect_camera(input: CameraConnectInput) -> Dict[str, Any]:
     """Connect to a camera device in NINA astronomy software.
     
@@ -810,7 +851,7 @@ async def nina_connect_camera(input: CameraConnectInput) -> Dict[str, Any]:
         logger.error(f"Unexpected error while connecting camera: {str(e)}")
         return create_error_response("NINACameraError", f"Unexpected error: {str(e)}")
 
-@mcp.tool()
+@tool()
 async def nina_disconnect_camera() -> Dict[str, Any]:
     """Disconnect the camera from NINA astronomy software.
     
@@ -839,7 +880,7 @@ async def nina_disconnect_camera() -> Dict[str, Any]:
     except Exception as e:
         return create_error_response("NINACameraError", str(e))
 
-@mcp.tool()
+@tool()
 async def nina_list_camera_devices() -> Dict[str, Any]:
     """List available camera devices in NINA astronomy software.
     This will also trigger a rescan of available devices.
@@ -870,7 +911,7 @@ async def nina_list_camera_devices() -> Dict[str, Any]:
     except Exception as e:
         return create_error_response("NINACameraError", str(e))
 
-@mcp.tool()
+@tool()
 async def nina_get_camera_info() -> Dict[str, Any]:
     """Get camera information from NINA astronomy software.
     
@@ -900,7 +941,7 @@ async def nina_get_camera_info() -> Dict[str, Any]:
     except Exception as e:
         return create_error_response("NINACameraError", str(e))
 
-@mcp.tool()
+@tool()
 async def nina_set_readout_mode(input: CameraReadoutModeInput) -> Dict[str, Any]:
     """Set the readout mode for the camera in NINA astronomy software.
     
@@ -936,7 +977,7 @@ async def nina_set_readout_mode(input: CameraReadoutModeInput) -> Dict[str, Any]
     except Exception as e:
         return create_error_response("NINACameraError", str(e))
 
-@mcp.tool()
+@tool()
 async def nina_start_cooling(input: CameraCoolingInput) -> Dict[str, Any]:
     """Start cooling the camera in NINA astronomy software.
     
@@ -986,7 +1027,7 @@ async def nina_start_cooling(input: CameraCoolingInput) -> Dict[str, Any]:
     except Exception as e:
         return create_error_response("NINACameraError", str(e))
 
-@mcp.tool()
+@tool()
 async def nina_stop_cooling() -> Dict[str, Any]:
     """Stop the camera's cooling process in NINA astronomy software.
     
@@ -1025,7 +1066,7 @@ async def nina_stop_cooling() -> Dict[str, Any]:
     except Exception as e:
         return create_error_response("NINACameraError", str(e))
 
-@mcp.tool()
+@tool()
 async def nina_abort_exposure() -> Dict[str, Any]:
     """Abort the current camera exposure in NINA astronomy software.
     
@@ -1057,7 +1098,7 @@ async def nina_abort_exposure() -> Dict[str, Any]:
     except Exception as e:
         return create_error_response("NINACameraError", str(e))
 
-@mcp.tool()
+@tool()
 async def nina_control_dew_heater(input: CameraDewHeaterInput) -> Dict[str, Any]:
     """Control the camera's dew heater in NINA astronomy software.
     
@@ -1102,7 +1143,7 @@ async def nina_control_dew_heater(input: CameraDewHeaterInput) -> Dict[str, Any]
     except Exception as e:
         return create_error_response("NINACameraError", str(e))
 
-@mcp.tool()
+@tool()
 async def nina_set_binning(input: CameraBinningInput) -> Dict[str, Any]:
     """Set the camera's binning mode in NINA astronomy software.
     
@@ -1173,7 +1214,7 @@ async def _capture_and_confirm(client: "NinaAPIClient", endpoint: str, timeout: 
     return {"Success": False, "Error": f"No image was saved after {CAPTURE_ATTEMPTS} attempts: {problem}", "StatusCode": 500}
 
 
-@mcp.tool()
+@tool()
 async def nina_capture_image(input: CameraCaptureInput) -> Dict[str, Any]:
     """Capture an image with NINA astronomy software.
     
@@ -1342,7 +1383,7 @@ async def nina_capture_image(input: CameraCaptureInput) -> Dict[str, Any]:
             {"StatusCode": 500}
         )
 
-@mcp.tool()
+@tool()
 async def nina_get_capture_statistics() -> Dict[str, Any]:
     """Get statistics about the last captured image in NINA astronomy software.
     
@@ -1379,7 +1420,7 @@ async def nina_get_capture_statistics() -> Dict[str, Any]:
     except Exception as e:
         return create_error_response("NINACameraError", str(e))
 
-@mcp.tool()
+@tool()
 async def nina_get_image_history(input: ImageHistoryInput) -> Dict[str, Any]:
     """Get image history from NINA astronomy software.
     
@@ -1433,7 +1474,7 @@ async def nina_get_image_history(input: ImageHistoryInput) -> Dict[str, Any]:
         return create_error_response("NINAImageError", str(e))
 
 # Mount Tools
-@mcp.tool()
+@tool()
 async def nina_connect_mount(input: MountConnectInput) -> Dict[str, Any]:
     """Connect to a mount device in NINA astronomy software.
     
@@ -1474,7 +1515,7 @@ async def nina_connect_mount(input: MountConnectInput) -> Dict[str, Any]:
     except Exception as e:
         return create_error_response("NINAMountError", str(e))
 
-@mcp.tool()
+@tool()
 async def nina_disconnect_mount() -> Dict[str, Any]:
     """Disconnect the mount from NINA astronomy software.
     
@@ -1506,7 +1547,7 @@ async def nina_disconnect_mount() -> Dict[str, Any]:
     except Exception as e:
         return create_error_response("NINAMountError", str(e))
 
-@mcp.tool()
+@tool()
 async def nina_list_mount_devices() -> Dict[str, Any]:
     """List available mount devices in NINA astronomy software.
     
@@ -1539,7 +1580,7 @@ async def nina_list_mount_devices() -> Dict[str, Any]:
     except Exception as e:
         return create_error_response("NINAMountError", str(e))
 
-@mcp.tool()
+@tool()
 async def nina_rescan_mount_devices() -> Dict[str, Any]:
     """Rescan for mount devices in NINA astronomy software.
     
@@ -1572,7 +1613,7 @@ async def nina_rescan_mount_devices() -> Dict[str, Any]:
     except Exception as e:
         return create_error_response("NINAMountError", str(e))
 
-@mcp.tool()
+@tool()
 async def nina_get_mount_info() -> Dict[str, Any]:
     """Get mount information from NINA astronomy software.
     
@@ -1605,7 +1646,7 @@ async def nina_get_mount_info() -> Dict[str, Any]:
     except Exception as e:
         return create_error_response("NINAMountError", str(e))
 
-@mcp.tool()
+@tool()
 async def nina_home_mount() -> Dict[str, Any]:
     """Send the mount to its home position in NINA astronomy software.
     
@@ -1637,7 +1678,7 @@ async def nina_home_mount() -> Dict[str, Any]:
     except Exception as e:
         return create_error_response("NINAMountError", str(e))
 
-@mcp.tool()
+@tool()
 async def nina_set_tracking_mode(input: MountTrackingModeInput) -> Dict[str, Any]:
     """Set the mount's tracking mode in NINA astronomy software.
     
@@ -1685,7 +1726,7 @@ async def nina_set_tracking_mode(input: MountTrackingModeInput) -> Dict[str, Any
     except Exception as e:
         return create_error_response("NINAMountError", str(e))
 
-@mcp.tool()
+@tool()
 async def nina_park_mount() -> Dict[str, Any]:
     """Park the mount in NINA astronomy software.
     
@@ -1717,7 +1758,7 @@ async def nina_park_mount() -> Dict[str, Any]:
     except Exception as e:
         return create_error_response("NINAMountError", str(e))
 
-@mcp.tool()
+@tool()
 async def nina_unpark_mount() -> Dict[str, Any]:
     """Unpark the mount in NINA astronomy software.
     
@@ -1749,7 +1790,7 @@ async def nina_unpark_mount() -> Dict[str, Any]:
     except Exception as e:
         return create_error_response("NINAMountError", str(e))
 
-@mcp.tool()
+@tool()
 async def nina_flip_mount() -> Dict[str, Any]:
     """Flip the mount in NINA astronomy software.
     
@@ -1781,7 +1822,7 @@ async def nina_flip_mount() -> Dict[str, Any]:
     except Exception as e:
         return create_error_response("NINAMountError", str(e))
 
-@mcp.tool()
+@tool()
 async def nina_slew_mount(input: MountSlewInput) -> Dict[str, Any]:
     """Slew the mount to specified coordinates in NINA astronomy software.
     
@@ -1852,7 +1893,7 @@ async def nina_slew_mount(input: MountSlewInput) -> Dict[str, Any]:
     except Exception as e:
         return create_error_response("NINAMountError", str(e))
 
-@mcp.tool()
+@tool()
 async def nina_sync_mount(input: MountSyncInput) -> Dict[str, Any]:
     """Sync the mount in NINA astronomy software: tell it where it is really pointing.
 
@@ -1903,7 +1944,7 @@ async def nina_sync_mount(input: MountSyncInput) -> Dict[str, Any]:
     except Exception as e:
         return create_error_response("NINAMountError", str(e))
 
-@mcp.tool()
+@tool()
 async def nina_stop_slew() -> Dict[str, Any]:
     """Stop the mount's current slew in NINA astronomy software.
     
@@ -1935,7 +1976,7 @@ async def nina_stop_slew() -> Dict[str, Any]:
     except Exception as e:
         return create_error_response("NINAMountError", str(e))
 
-@mcp.tool()
+@tool()
 async def nina_set_park_position(input: MountParkPositionInput) -> Dict[str, Any]:
     """Set the mount's park position in NINA astronomy software.
     
@@ -1973,7 +2014,7 @@ async def nina_set_park_position(input: MountParkPositionInput) -> Dict[str, Any
         return create_error_response("NINAMountError", str(e))
 
 # Dome Tools
-@mcp.tool()
+@tool()
 async def nina_connect_dome(input: DomeConnectInput) -> Dict[str, Any]:
     """Connect to a dome device in NINA astronomy software.
     
@@ -2014,7 +2055,7 @@ async def nina_connect_dome(input: DomeConnectInput) -> Dict[str, Any]:
     except Exception as e:
         return create_error_response("NINADomeError", str(e))
 
-@mcp.tool()
+@tool()
 async def nina_disconnect_dome() -> Dict[str, Any]:
     """Disconnect the dome from NINA astronomy software.
     
@@ -2046,7 +2087,7 @@ async def nina_disconnect_dome() -> Dict[str, Any]:
     except Exception as e:
         return create_error_response("NINADomeError", str(e))
 
-@mcp.tool()
+@tool()
 async def nina_list_dome_devices() -> Dict[str, Any]:
     """List available dome devices in NINA astronomy software.
     
@@ -2079,7 +2120,7 @@ async def nina_list_dome_devices() -> Dict[str, Any]:
     except Exception as e:
         return create_error_response("NINADomeError", str(e))
 
-@mcp.tool()
+@tool()
 async def nina_rescan_dome_devices() -> Dict[str, Any]:
     """Rescan for dome devices in NINA astronomy software.
     
@@ -2112,7 +2153,7 @@ async def nina_rescan_dome_devices() -> Dict[str, Any]:
     except Exception as e:
         return create_error_response("NINADomeError", str(e))
 
-@mcp.tool()
+@tool()
 async def nina_get_dome_info() -> Dict[str, Any]:
     """Get dome information from NINA astronomy software.
     
@@ -2145,7 +2186,7 @@ async def nina_get_dome_info() -> Dict[str, Any]:
     except Exception as e:
         return create_error_response("NINADomeError", str(e))
 
-@mcp.tool()
+@tool()
 async def nina_open_dome_shutter() -> Dict[str, Any]:
     """Open the dome shutter in NINA astronomy software.
     
@@ -2177,7 +2218,7 @@ async def nina_open_dome_shutter() -> Dict[str, Any]:
     except Exception as e:
         return create_error_response("NINADomeError", str(e))
 
-@mcp.tool()
+@tool()
 async def nina_close_dome_shutter() -> Dict[str, Any]:
     """Close the dome shutter in NINA astronomy software.
     
@@ -2209,7 +2250,7 @@ async def nina_close_dome_shutter() -> Dict[str, Any]:
     except Exception as e:
         return create_error_response("NINADomeError", str(e))
 
-@mcp.tool()
+@tool()
 async def nina_stop_dome_movement() -> Dict[str, Any]:
     """Stop the dome's current movement in NINA astronomy software.
     
@@ -2241,7 +2282,7 @@ async def nina_stop_dome_movement() -> Dict[str, Any]:
     except Exception as e:
         return create_error_response("NINADomeError", str(e))
 
-@mcp.tool()
+@tool()
 async def nina_set_dome_follow(input: DomeFollowInput) -> Dict[str, Any]:
     """Set whether the dome follows the telescope in NINA astronomy software.
     
@@ -2277,7 +2318,7 @@ async def nina_set_dome_follow(input: DomeFollowInput) -> Dict[str, Any]:
     except Exception as e:
         return create_error_response("NINADomeError", str(e))
 
-@mcp.tool()
+@tool()
 async def nina_sync_dome_to_telescope() -> Dict[str, Any]:
     """Sync the dome position to the telescope position in NINA astronomy software.
     
@@ -2309,7 +2350,7 @@ async def nina_sync_dome_to_telescope() -> Dict[str, Any]:
     except Exception as e:
         return create_error_response("NINADomeError", str(e))
 
-@mcp.tool()
+@tool()
 async def nina_slew_dome(input: DomeSlewInput) -> Dict[str, Any]:
     """Slew the dome to specified azimuth in NINA astronomy software.
     
@@ -2345,7 +2386,7 @@ async def nina_slew_dome(input: DomeSlewInput) -> Dict[str, Any]:
     except Exception as e:
         return create_error_response("NINADomeError", str(e))
 
-@mcp.tool()
+@tool()
 async def nina_set_dome_park_position(input: DomeParkPositionInput) -> Dict[str, Any]:
     """Set the dome's park position in NINA astronomy software.
     
@@ -2381,7 +2422,7 @@ async def nina_set_dome_park_position(input: DomeParkPositionInput) -> Dict[str,
     except Exception as e:
         return create_error_response("NINADomeError", str(e))
 
-@mcp.tool()
+@tool()
 async def nina_park_dome() -> Dict[str, Any]:
     """Park the dome in NINA astronomy software.
     
@@ -2413,7 +2454,7 @@ async def nina_park_dome() -> Dict[str, Any]:
     except Exception as e:
         return create_error_response("NINADomeError", str(e))
 
-@mcp.tool()
+@tool()
 async def nina_home_dome() -> Dict[str, Any]:
     """Send the dome to its home position in NINA astronomy software.
     
@@ -2445,7 +2486,7 @@ async def nina_home_dome() -> Dict[str, Any]:
     except Exception as e:
         return create_error_response("NINADomeError", str(e))
 
-@mcp.tool()
+@tool()
 async def nina_wait(seconds: float) -> Dict[str, Any]:
     """Wait for a specified duration in seconds.
     
@@ -2481,7 +2522,7 @@ async def nina_wait(seconds: float) -> Dict[str, Any]:
             {"StatusCode": 500}
         )
 
-@mcp.tool()
+@tool()
 async def nina_connect(input: ConnectInput) -> Dict[str, Any]:
     """Connect to the NINA astronomy software HTTP server. This tool is specifically for NINA control and should not be used for direct hardware connections."""
     try:
@@ -2506,7 +2547,7 @@ async def nina_connect(input: ConnectInput) -> Dict[str, Any]:
         server_state.set_error(str(e))
         return create_error_response("NINAConnectionError", str(e))
 
-@mcp.tool()
+@tool()
 async def nina_disconnect() -> Dict[str, Any]:
     """Disconnect from the NINA astronomy software HTTP server. This tool is specifically for NINA control and should not be used for direct hardware connections."""
     try:
@@ -2523,7 +2564,7 @@ async def nina_disconnect() -> Dict[str, Any]:
         server_state.set_error(str(e))
         return create_error_response("NINADisconnectionError", str(e))
 
-@mcp.tool()
+@tool()
 async def nina_time_now() -> Dict[str, Any]:
     """Get the current time from the computer in various formats.
     
@@ -2556,7 +2597,7 @@ async def nina_time_now() -> Dict[str, Any]:
             {"StatusCode": 500}
         )
 
-@mcp.tool()
+@tool()
 async def nina_get_status() -> Dict[str, Any]:
     """Get the current status of all connected equipment.
     
@@ -2670,7 +2711,7 @@ async def nina_get_status() -> Dict[str, Any]:
         )
 
 # Flats Tools
-@mcp.tool()
+@tool()
 async def nina_sky_flats(input: FlatsInput) -> Dict[str, Any]:
     """Start capturing sky flats in NINA astronomy software.
     
@@ -2741,7 +2782,7 @@ async def nina_sky_flats(input: FlatsInput) -> Dict[str, Any]:
     except Exception as e:
         return create_error_response("NINAFlatsError", str(e))
 
-@mcp.tool()
+@tool()
 async def nina_start_flats(input: FlatsInput) -> Dict[str, Any]:
     """Start capturing flats in NINA astronomy software.
     
@@ -2810,7 +2851,7 @@ async def nina_start_flats(input: FlatsInput) -> Dict[str, Any]:
     except Exception as e:
         return create_error_response("NINAFlatsError", str(e))
 
-@mcp.tool()
+@tool()
 async def nina_stop_flats() -> Dict[str, Any]:
     """Stop the current flats capture in NINA astronomy software.
     
@@ -2839,7 +2880,7 @@ async def nina_stop_flats() -> Dict[str, Any]:
     except Exception as e:
         return create_error_response("NINAFlatsError", str(e))
 
-@mcp.tool()
+@tool()
 async def nina_get_flats_status() -> Dict[str, Any]:
     """Get the current status of flats capture in NINA astronomy software.
     
@@ -2869,7 +2910,7 @@ async def nina_get_flats_status() -> Dict[str, Any]:
     except Exception as e:
         return create_error_response("NINAFlatsError", str(e))
 
-@mcp.tool()
+@tool()
 async def nina_get_flats_progress() -> Dict[str, Any]:
     """Get the progress of the current flats capture in NINA astronomy software.
     
@@ -2900,7 +2941,7 @@ async def nina_get_flats_progress() -> Dict[str, Any]:
         return create_error_response("NINAFlatsError", str(e))
 
 # Guider Tools
-@mcp.tool()
+@tool()
 async def nina_get_guider_info() -> Dict[str, Any]:
     """Get detailed information about the connected guider.
     
@@ -2922,7 +2963,7 @@ async def nina_get_guider_info() -> Dict[str, Any]:
     except Exception as e:
         return create_error_response("GuiderError", str(e))
 
-@mcp.tool()
+@tool()
 async def nina_connect_guider(device_id: Optional[str] = None) -> Dict[str, Any]:
     """Connect to a guider device.
     
@@ -2944,7 +2985,7 @@ async def nina_connect_guider(device_id: Optional[str] = None) -> Dict[str, Any]
     except Exception as e:
         return create_error_response("GuiderError", str(e))
 
-@mcp.tool()
+@tool()
 async def nina_disconnect_guider() -> Dict[str, Any]:
     """Disconnect the guider."""
     try:
@@ -2959,7 +3000,7 @@ async def nina_disconnect_guider() -> Dict[str, Any]:
     except Exception as e:
         return create_error_response("GuiderError", str(e))
 
-@mcp.tool()
+@tool()
 async def nina_list_guider_devices() -> Dict[str, Any]:
     """List all available guider devices that can be connected."""
     try:
@@ -2974,7 +3015,7 @@ async def nina_list_guider_devices() -> Dict[str, Any]:
     except Exception as e:
         return create_error_response("GuiderError", str(e))
 
-@mcp.tool()
+@tool()
 async def nina_rescan_guider_devices() -> Dict[str, Any]:
     """Rescan for available guider devices."""
     try:
@@ -2989,7 +3030,7 @@ async def nina_rescan_guider_devices() -> Dict[str, Any]:
     except Exception as e:
         return create_error_response("GuiderError", str(e))
 
-@mcp.tool()
+@tool()
 async def nina_start_guiding(calibrate: bool = False) -> Dict[str, Any]:
     """Start guiding with optional calibration.
     
@@ -3011,7 +3052,7 @@ async def nina_start_guiding(calibrate: bool = False) -> Dict[str, Any]:
     except Exception as e:
         return create_error_response("GuiderError", str(e))
 
-@mcp.tool()
+@tool()
 async def nina_stop_guiding() -> Dict[str, Any]:
     """Stop the current guiding operation."""
     try:
@@ -3026,7 +3067,7 @@ async def nina_stop_guiding() -> Dict[str, Any]:
     except Exception as e:
         return create_error_response("GuiderError", str(e))
 
-@mcp.tool()
+@tool()
 async def nina_get_guider_graph() -> Dict[str, Any]:
     """Get guider graph data for analysis."""
     try:
@@ -3041,7 +3082,7 @@ async def nina_get_guider_graph() -> Dict[str, Any]:
     except Exception as e:
         return create_error_response("GuiderError", str(e))
 
-@mcp.tool()
+@tool()
 async def nina_calibrate_guider() -> Dict[str, Any]:
     """Calibrate the guider without starting guiding."""
     try:
@@ -3056,7 +3097,7 @@ async def nina_calibrate_guider() -> Dict[str, Any]:
     except Exception as e:
         return create_error_response("GuiderError", str(e))
 
-@mcp.tool()
+@tool()
 async def nina_clear_guider_calibration() -> Dict[str, Any]:
     """Clear the guider's calibration data."""
     try:
@@ -3087,7 +3128,7 @@ class ApplicationScreenshotInput(BaseModel):
     """Input model for screenshot endpoint"""
     pass
 
-@mcp.tool()
+@tool()
 async def nina_get_version(input: ApplicationVersionInput) -> Dict[str, Any]:
     """Get the version of the NINA Advanced API.
     
@@ -3117,7 +3158,7 @@ async def nina_get_version(input: ApplicationVersionInput) -> Dict[str, Any]:
     except Exception as e:
         return create_error_response("NINAApplicationError", str(e))
 
-@mcp.tool()
+@tool()
 async def nina_switch_tab(input: ApplicationSwitchTabInput) -> Dict[str, Any]:
     """Switch to a specific tab in the NINA application.
     
@@ -3150,7 +3191,7 @@ async def nina_switch_tab(input: ApplicationSwitchTabInput) -> Dict[str, Any]:
     except Exception as e:
         return create_error_response("NINAApplicationError", str(e))
 
-@mcp.tool()
+@tool()
 async def nina_get_plugins(input: ApplicationPluginsInput) -> Dict[str, Any]:
     """Get information about installed plugins in NINA.
     
@@ -3180,7 +3221,7 @@ async def nina_get_plugins(input: ApplicationPluginsInput) -> Dict[str, Any]:
     except Exception as e:
         return create_error_response("NINAApplicationError", str(e))
 
-@mcp.tool()
+@tool()
 async def nina_get_screenshot(input: ApplicationScreenshotInput) -> Dict[str, Any]:
     """Get a screenshot of the NINA application and save it to the configured image directory.
     
@@ -3250,7 +3291,7 @@ class CameraWarmingInput(BaseModel):
     duration: Optional[int] = None  # Duration in minutes (not seconds)
     cancel: Optional[bool] = False  # Whether to cancel the warming process
 
-@mcp.tool()
+@tool()
 async def nina_start_warming(input: CameraWarmingInput) -> Dict[str, Any]:
     """Start warming the camera in NINA astronomy software.
     
@@ -3322,7 +3363,7 @@ class FlatPanelBrightnessInput(BaseModel):
     """Input model for flat panel brightness settings"""
     brightness: int  # Brightness value (0-100)
 
-@mcp.tool()
+@tool()
 async def nina_connect_flatpanel(input: FlatPanelConnectInput) -> Dict[str, Any]:
     """Connect to a flat panel device in NINA astronomy software.
     
@@ -3359,7 +3400,7 @@ async def nina_connect_flatpanel(input: FlatPanelConnectInput) -> Dict[str, Any]
     except Exception as e:
         return create_error_response("NINAFlatPanelError", str(e))
 
-@mcp.tool()
+@tool()
 async def nina_disconnect_flatpanel() -> Dict[str, Any]:
     """Disconnect the flat panel from NINA astronomy software.
     
@@ -3388,7 +3429,7 @@ async def nina_disconnect_flatpanel() -> Dict[str, Any]:
     except Exception as e:
         return create_error_response("NINAFlatPanelError", str(e))
 
-@mcp.tool()
+@tool()
 async def nina_list_flatpanel_devices() -> Dict[str, Any]:
     """List available flat panel devices in NINA astronomy software.
     
@@ -3418,7 +3459,7 @@ async def nina_list_flatpanel_devices() -> Dict[str, Any]:
     except Exception as e:
         return create_error_response("NINAFlatPanelError", str(e))
 
-@mcp.tool()
+@tool()
 async def nina_rescan_flatpanel_devices() -> Dict[str, Any]:
     """Rescan for flat panel devices in NINA astronomy software.
     
@@ -3448,7 +3489,7 @@ async def nina_rescan_flatpanel_devices() -> Dict[str, Any]:
     except Exception as e:
         return create_error_response("NINAFlatPanelError", str(e))
 
-@mcp.tool()
+@tool()
 async def nina_get_flatpanel_info() -> Dict[str, Any]:
     """Get information about the connected flat panel in NINA astronomy software.
     
@@ -3478,7 +3519,7 @@ async def nina_get_flatpanel_info() -> Dict[str, Any]:
     except Exception as e:
         return create_error_response("NINAFlatPanelError", str(e))
 
-@mcp.tool()
+@tool()
 async def nina_set_flatpanel_light(input: FlatPanelLightInput) -> Dict[str, Any]:
     """Set the flat panel light state in NINA astronomy software.
     
@@ -3511,7 +3552,7 @@ async def nina_set_flatpanel_light(input: FlatPanelLightInput) -> Dict[str, Any]
     except Exception as e:
         return create_error_response("NINAFlatPanelError", str(e))
 
-@mcp.tool()
+@tool()
 async def nina_set_flatpanel_cover(input: FlatPanelCoverInput) -> Dict[str, Any]:
     """Set the flat panel cover state in NINA astronomy software.
     
@@ -3544,7 +3585,7 @@ async def nina_set_flatpanel_cover(input: FlatPanelCoverInput) -> Dict[str, Any]
     except Exception as e:
         return create_error_response("NINAFlatPanelError", str(e))
 
-@mcp.tool()
+@tool()
 async def nina_set_flatpanel_brightness(input: FlatPanelBrightnessInput) -> Dict[str, Any]:
     """Set the flat panel brightness in NINA astronomy software.
     
@@ -3591,7 +3632,7 @@ class FocuserTemperatureInput(BaseModel):
     enabled: bool  # True to enable, False to disable
     temperature: Optional[float] = None  # Target temperature in Celsius
 
-@mcp.tool()
+@tool()
 async def nina_connect_focuser(input: FocuserConnectInput) -> Dict[str, Any]:
     """Connect to a focuser device in NINA astronomy software.
     
@@ -3628,7 +3669,7 @@ async def nina_connect_focuser(input: FocuserConnectInput) -> Dict[str, Any]:
     except Exception as e:
         return create_error_response("NINAFocuserError", str(e))
 
-@mcp.tool()
+@tool()
 async def nina_disconnect_focuser() -> Dict[str, Any]:
     """Disconnect the focuser from NINA astronomy software.
     
@@ -3657,7 +3698,7 @@ async def nina_disconnect_focuser() -> Dict[str, Any]:
     except Exception as e:
         return create_error_response("NINAFocuserError", str(e))
 
-@mcp.tool()
+@tool()
 async def nina_list_focuser_devices() -> Dict[str, Any]:
     """List available focuser devices in NINA astronomy software.
     
@@ -3687,7 +3728,7 @@ async def nina_list_focuser_devices() -> Dict[str, Any]:
     except Exception as e:
         return create_error_response("NINAFocuserError", str(e))
 
-@mcp.tool()
+@tool()
 async def nina_rescan_focuser_devices() -> Dict[str, Any]:
     """Rescan for focuser devices in NINA astronomy software.
     
@@ -3717,7 +3758,7 @@ async def nina_rescan_focuser_devices() -> Dict[str, Any]:
     except Exception as e:
         return create_error_response("NINAFocuserError", str(e))
 
-@mcp.tool()
+@tool()
 async def nina_get_focuser_info() -> Dict[str, Any]:
     """Get information about the connected focuser in NINA astronomy software.
     
@@ -3747,7 +3788,7 @@ async def nina_get_focuser_info() -> Dict[str, Any]:
     except Exception as e:
         return create_error_response("NINAFocuserError", str(e))
 
-@mcp.tool()
+@tool()
 async def nina_move_focuser(input: FocuserMoveInput) -> Dict[str, Any]:
     """Move the focuser to a specific position in NINA astronomy software.
     
@@ -3785,7 +3826,7 @@ async def nina_move_focuser(input: FocuserMoveInput) -> Dict[str, Any]:
     except Exception as e:
         return create_error_response("NINAFocuserError", str(e))
 
-@mcp.tool()
+@tool()
 async def nina_set_focuser_temperature(input: FocuserTemperatureInput) -> Dict[str, Any]:
     """Set the focuser temperature compensation in NINA astronomy software.
     
@@ -3828,7 +3869,7 @@ class ImageParameterInput(BaseModel):
     parameter: str  # The parameter to get or set
     value: Optional[Any] = None  # The value to set (if setting a parameter)
 
-@mcp.tool()
+@tool()
 async def nina_get_image_parameter(input: ImageParameterInput) -> Dict[str, Any]:
     """Get an image parameter from NINA astronomy software.
     
@@ -3862,7 +3903,7 @@ async def nina_get_image_parameter(input: ImageParameterInput) -> Dict[str, Any]
     except Exception as e:
         return create_error_response("NINAImageError", str(e))
 
-@mcp.tool()
+@tool()
 async def nina_set_image_parameter(input: ImageParameterInput) -> Dict[str, Any]:
     """Set an image parameter in NINA astronomy software.
     
@@ -3900,7 +3941,7 @@ async def nina_set_image_parameter(input: ImageParameterInput) -> Dict[str, Any]
     except Exception as e:
         return create_error_response("NINAImageError", str(e))
 
-@mcp.tool()
+@tool()
 async def nina_get_image_parameters() -> Dict[str, Any]:
     """Get all image parameters from NINA astronomy software.
     
@@ -3930,7 +3971,7 @@ async def nina_get_image_parameters() -> Dict[str, Any]:
     except Exception as e:
         return create_error_response("NINAImageError", str(e))
 
-@mcp.tool()
+@tool()
 async def nina_reset_image_parameters() -> Dict[str, Any]:
     """Reset all image parameters to their default values in NINA astronomy software.
     
@@ -3977,7 +4018,7 @@ class ImageGetInput(BaseModel):
     save: Optional[bool] = None  # Whether to save the image to DEFAULT_IMAGE_SAVE_DIR
     filename: Optional[str] = None  # Optional filename for saved image
 
-@mcp.tool()
+@tool()
 async def nina_get_image(input: ImageGetInput) -> Dict[str, Any]:
     """Get an image from NINA astronomy software.
     
@@ -4205,7 +4246,7 @@ class ImageThumbnailInput(BaseModel):
     width: Optional[int] = None  # Optional width of thumbnail
     height: Optional[int] = None  # Optional height of thumbnail
 
-@mcp.tool()
+@tool()
 async def nina_get_image_history(input: ImageHistoryInput) -> Dict[str, Any]:
     """Get image history from NINA astronomy software.
     
@@ -4332,7 +4373,7 @@ async def nina_get_image_history(input: ImageHistoryInput) -> Dict[str, Any]:
             {"StatusCode": 500}
         )
 
-@mcp.tool()
+@tool()
 async def nina_get_image_thumbnail(input: ImageThumbnailInput) -> Dict[str, Any]:
     """Get an image thumbnail from NINA astronomy software and save it to disk.
     
@@ -4433,7 +4474,7 @@ class RotatorReverseInput(BaseModel):
     """Input model for setting rotator reverse state"""
     enabled: bool  # True to enable reverse, False to disable
 
-@mcp.tool()
+@tool()
 async def nina_connect_rotator(input: RotatorConnectInput) -> Dict[str, Any]:
     """Connect to a rotator device in NINA astronomy software.
     
@@ -4470,7 +4511,7 @@ async def nina_connect_rotator(input: RotatorConnectInput) -> Dict[str, Any]:
     except Exception as e:
         return create_error_response("NINARotatorError", str(e))
 
-@mcp.tool()
+@tool()
 async def nina_disconnect_rotator() -> Dict[str, Any]:
     """Disconnect the rotator from NINA astronomy software.
     
@@ -4499,7 +4540,7 @@ async def nina_disconnect_rotator() -> Dict[str, Any]:
     except Exception as e:
         return create_error_response("NINARotatorError", str(e))
 
-@mcp.tool()
+@tool()
 async def nina_list_rotator_devices() -> Dict[str, Any]:
     """List available rotator devices in NINA astronomy software.
     
@@ -4529,7 +4570,7 @@ async def nina_list_rotator_devices() -> Dict[str, Any]:
     except Exception as e:
         return create_error_response("NINARotatorError", str(e))
 
-@mcp.tool()
+@tool()
 async def nina_rescan_rotator_devices() -> Dict[str, Any]:
     """Rescan for rotator devices in NINA astronomy software.
     
@@ -4559,7 +4600,7 @@ async def nina_rescan_rotator_devices() -> Dict[str, Any]:
     except Exception as e:
         return create_error_response("NINARotatorError", str(e))
 
-@mcp.tool()
+@tool()
 async def nina_get_rotator_info() -> Dict[str, Any]:
     """Get information about the connected rotator in NINA astronomy software.
     
@@ -4589,7 +4630,7 @@ async def nina_get_rotator_info() -> Dict[str, Any]:
     except Exception as e:
         return create_error_response("NINARotatorError", str(e))
 
-@mcp.tool()
+@tool()
 async def nina_move_rotator(input: RotatorMoveInput) -> Dict[str, Any]:
     """Move the rotator to a specific position in NINA astronomy software.
     
@@ -4627,7 +4668,7 @@ async def nina_move_rotator(input: RotatorMoveInput) -> Dict[str, Any]:
     except Exception as e:
         return create_error_response("NINARotatorError", str(e))
 
-@mcp.tool()
+@tool()
 async def nina_halt_rotator() -> Dict[str, Any]:
     """Halt the rotator's current movement in NINA astronomy software.
     
@@ -4656,7 +4697,7 @@ async def nina_halt_rotator() -> Dict[str, Any]:
     except Exception as e:
         return create_error_response("NINARotatorError", str(e))
 
-@mcp.tool()
+@tool()
 async def nina_sync_rotator(input: RotatorSyncInput) -> Dict[str, Any]:
     """Sync the rotator to a specific position in NINA astronomy software.
     
@@ -4689,7 +4730,7 @@ async def nina_sync_rotator(input: RotatorSyncInput) -> Dict[str, Any]:
     except Exception as e:
         return create_error_response("NINARotatorError", str(e))
 
-@mcp.tool()
+@tool()
 async def nina_set_rotator_reverse(input: RotatorReverseInput) -> Dict[str, Any]:
     """Set the rotator's reverse state in NINA astronomy software.
     
@@ -4730,7 +4771,7 @@ class HelpInput(BaseModel):
     list_tools: Optional[bool] = None  # List all available tools
     list_categories: Optional[bool] = None  # List all available categories
 
-@mcp.tool()
+@tool()
 async def nina_help(input: HelpInput) -> Dict[str, Any]:
     """Get comprehensive help about NINA tools and categories.
     
