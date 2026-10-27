@@ -2,7 +2,7 @@
 
 Every MCP tool the server exposes, grouped by device. **core** and **mono** show the proposed profiles
 (see issue #3): `core` is connecting, guiding, cooling, slewing, focusing and capturing; `mono` is `core` plus the filter wheel.
-Tools marked **harness** are not in this server: the benchmark harness adds them (`nina_autofocus`, `nina_center_mount`, and a capped `nina_wait`), and issue #5 moves them here.
+The benchmark harness adds `nina_autofocus` and `nina_center_mount` (listed at the end) and replaces `nina_wait` with a version capped at 300 s; issue #5 moves them into the server. That makes the 106 tools the benchmark quotes.
 
 104 tools in the server.
 
