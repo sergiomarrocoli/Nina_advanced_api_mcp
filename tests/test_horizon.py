@@ -60,7 +60,7 @@ def slew(monkeypatch, info, ra, dec, **kwargs):
         return client
 
     monkeypatch.setattr(m, "get_client", get_client)
-    result = asyncio.run(m.nina_slew_mount(m.MountSlewInput(ra=ra, dec=dec, **kwargs)))
+    result = asyncio.run(m.nina_slew_mount(ra=ra, dec=dec, **kwargs))
     return result, [r for r in client.requests if r.startswith("equipment/mount/slew")]
 
 
