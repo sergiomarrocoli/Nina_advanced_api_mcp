@@ -508,7 +508,6 @@ class MountSlewInput(BaseModel):
     ra: float  # Right Ascension in hours (will be converted to degrees)
     dec: float  # Declination in degrees
     wait_for_completion: Optional[bool] = True  # Whether to wait for the slew to complete
-    allow_below_horizon: Optional[bool] = False  # Slew even if the target is below the horizon (the default is to refuse)
 
 class MountSyncInput(BaseModel):
     """Input model for syncing the mount"""
@@ -1862,8 +1861,6 @@ async def nina_slew_mount(input: MountSlewInput) -> Dict[str, Any]:
             ra: Right Ascension in hours (0-24)
             dec: Declination in degrees (-90 to +90)
             wait_for_completion: Whether to wait for the slew to complete
-            allow_below_horizon: Slew even if the target is below the horizon. Off by default: a slew to a
-                target below the horizon is refused, with the reason.
     
     Returns:
         Dict containing:
@@ -1894,20 +1891,15 @@ async def nina_slew_mount(input: MountSlewInput) -> Dict[str, Any]:
                 {"StatusCode": 400}
             )
 
-        # Refuse a target that is below the horizon, unless asked to go anyway. If the mount's info cannot be read
-        # the slew goes ahead: no check is better than a wrong refusal.
-        if not input.allow_below_horizon:
-            try:
-                info = (await client._send_request("GET", "equipment/mount/info")).get("Response", {}) or {}
-            except Exception:
-                info = {}
-            reason = below_horizon_message(input.ra, input.dec, info)
-            if reason:
-                return create_error_response(
-                    "NINAMountError",
-                    f"Not slewing: {reason} Set allow_below_horizon to override.",
-                    {"StatusCode": 400}
-                )
+        # Refuse a target that is below the horizon. There is no override: a model that can switch the check off
+        # does. If the mount's info cannot be read the slew goes ahead: no check is better than a wrong refusal.
+        try:
+            info = (await client._send_request("GET", "equipment/mount/info")).get("Response", {}) or {}
+        except Exception:
+            info = {}
+        reason = below_horizon_message(input.ra, input.dec, info)
+        if reason:
+            return create_error_response("NINAMountError", f"Not slewing: {reason}", {"StatusCode": 400})
 
         # Convert RA from hours to degrees (1 hour = 15 degrees)
         ra_degrees = input.ra * 15.0

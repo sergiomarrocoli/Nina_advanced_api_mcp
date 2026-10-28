@@ -69,9 +69,8 @@ def test_a_slew_below_the_horizon_is_refused_and_never_sent(monkeypatch):
     assert result["Success"] is False and "Not slewing" in result["Error"] and sent == []
 
 
-def test_allow_below_horizon_sends_the_slew(monkeypatch):
-    result, sent = slew(monkeypatch, SITE, *ALPHA_CEN, allow_below_horizon=True)
-    assert result["Success"] is True and len(sent) == 1
+def test_there_is_no_override_argument():
+    assert "allow_below_horizon" not in m.MountSlewInput.model_fields
 
 
 def test_a_target_that_is_up_is_slewed_to(monkeypatch):
