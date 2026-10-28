@@ -36,6 +36,7 @@ IMAGE_SAVE_DIR = str(Path(os.getenv(ENV_IMAGE_SAVE_DIR, DEFAULT_IMAGE_SAVE_DIR))
 # Now import everything else
 import asyncio
 import inspect
+import math
 import logging
 import re
 import sys
@@ -1822,6 +1823,35 @@ async def nina_flip_mount() -> Dict[str, Any]:
     except Exception as e:
         return create_error_response("NINAMountError", str(e))
 
+def target_altitude_deg(ra_hours: float, dec_deg: float, latitude_deg: float, sidereal_hours: float) -> float:
+    """Altitude above the horizon, in degrees, of a target at the given local sidereal time."""
+    hour_angle = math.radians((sidereal_hours - ra_hours) * 15.0)
+    lat, dec = math.radians(latitude_deg), math.radians(dec_deg)
+    return math.degrees(math.asin(math.sin(lat) * math.sin(dec) + math.cos(lat) * math.cos(dec) * math.cos(hour_angle)))
+
+
+def highest_altitude_deg(dec_deg: float, latitude_deg: float) -> float:
+    """The highest altitude a target at this declination ever reaches from this latitude (negative: it never rises)."""
+    return 90.0 - abs(latitude_deg - dec_deg)
+
+
+def below_horizon_message(ra_hours: float, dec_deg: float, info: Dict[str, Any]) -> Optional[str]:
+    """Why a slew should be refused, from the mount's info (site latitude and sidereal time), or None if it is fine.
+
+    Returns None as well when the mount does not report its site, since then there is nothing to check against."""
+    latitude, sidereal = info.get("SiteLatitude"), info.get("SiderealTime")
+    if latitude is None or sidereal is None:
+        return None
+    altitude = target_altitude_deg(ra_hours, dec_deg, latitude, sidereal)
+    if altitude >= 0:
+        return None
+    peak = highest_altitude_deg(dec_deg, latitude)
+    now = f"The target (RA {ra_hours:.2f} h, Dec {dec_deg:.1f}°) is {-altitude:.0f}° below the horizon now"
+    if peak < 0:
+        return f"{now}, and from latitude {latitude:g}° it never rises: its highest point is {-peak:.0f}° below the horizon."
+    return f"{now}; it rises later (highest point {peak:.0f}° above the horizon). Slew when it is up."
+
+
 @tool()
 async def nina_slew_mount(input: MountSlewInput) -> Dict[str, Any]:
     """Slew the mount to specified coordinates in NINA astronomy software.
@@ -1860,6 +1890,16 @@ async def nina_slew_mount(input: MountSlewInput) -> Dict[str, Any]:
                 "Declination must be between -90 and +90 degrees",
                 {"StatusCode": 400}
             )
+
+        # Refuse a target that is below the horizon. There is no override: a model that can switch the check off
+        # does. If the mount's info cannot be read the slew goes ahead: no check is better than a wrong refusal.
+        try:
+            info = (await client._send_request("GET", "equipment/mount/info")).get("Response", {}) or {}
+        except Exception:
+            info = {}
+        reason = below_horizon_message(input.ra, input.dec, info)
+        if reason:
+            return create_error_response("NINAMountError", f"Not slewing: {reason}", {"StatusCode": 400})
 
         # Convert RA from hours to degrees (1 hour = 15 degrees)
         ra_degrees = input.ra * 15.0
