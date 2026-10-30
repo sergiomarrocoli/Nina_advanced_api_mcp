@@ -44,7 +44,7 @@ import json
 import time
 from datetime import datetime
 import base64
-from typing import Dict, Any, Optional, List, Union, Callable, Literal, Annotated
+from typing import Dict, Any, Optional, List, Union, Callable, Literal, Annotated, Tuple
 from fastmcp import FastMCP
 from pydantic import BaseModel, Field
 from enum import Enum
@@ -420,7 +420,8 @@ class FilterWheelConnectInput(BaseModel):
     device_id: Optional[str] = None
 
 class FilterChangeInput(BaseModel):
-    filter_id: int
+    filter_id: Optional[int] = None  # The filter's position number, as in the wheel's list (starts at 0)
+    filter_name: Optional[str] = None  # The filter's name, such as "Green" or "Ha", instead of filter_id
 
 class FilterInfoInput(BaseModel):
     filter_id: int
@@ -505,7 +506,8 @@ class MountTrackingModeInput(BaseModel):
 
 class MountSlewInput(BaseModel):
     """Input model for mount slew settings"""
-    ra: float  # Right Ascension in hours (will be converted to degrees)
+    ra: Optional[float] = None  # Right Ascension in hours (0-24)
+    ra_degrees: Optional[float] = None  # Right Ascension in degrees (0-360), instead of ra
     dec: float  # Declination in degrees
     wait_for_completion: Optional[bool] = True  # Whether to wait for the slew to complete
 
@@ -734,7 +736,8 @@ async def nina_change_filter(input: FilterChangeInput) -> Dict[str, Any]:
     
     Args:
         input: FilterChangeInput containing:
-            filter_id: ID of the filter to change to
+            filter_name: Name of the filter, such as "Green" or "Ha" (use this or filter_id)
+            filter_id: Position number of the filter in the wheel's list, which starts at 0 (use this or filter_name)
     
     Returns:
         Dict containing:
@@ -751,12 +754,30 @@ async def nina_change_filter(input: FilterChangeInput) -> Dict[str, Any]:
                 {"StatusCode": 401}
             )
 
+        # Look the filter up in the wheel's own list, so a name works and a wrong id says what the choices are.
+        # If the list cannot be read, an id goes through unchecked, as before.
+        chosen = None
+        try:
+            info = (await client._send_request("GET", "equipment/filterwheel/info")).get("Response", {}) or {}
+            available = info.get("AvailableFilters") or []
+        except Exception:
+            available = []
+        if available:
+            chosen, problem = pick_filter(available, input.filter_id, input.filter_name)
+            if problem:
+                return create_error_response("NINAFilterWheelError", problem, {"StatusCode": 400})
+            filter_id = chosen["Id"]
+        elif input.filter_id is None:
+            return create_error_response("NINAFilterWheelError", "Could not read the wheel's filter list, so filter_name cannot be used. Give filter_id.", {"StatusCode": 400})
+        else:
+            filter_id = input.filter_id
+
         # Change to the specified filter
-        result = await client._send_request("GET", f"equipment/filterwheel/change-filter?filterId={input.filter_id}")
+        result = await client._send_request("GET", f"equipment/filterwheel/change-filter?filterId={filter_id}")
         
         return {
             "Success": True,
-            "Message": f"Filter changed to ID {input.filter_id} successfully",
+            "Message": f"Filter changed to {chosen['Name']} (id {filter_id}) successfully" if chosen else f"Filter changed to ID {filter_id} successfully",
             "Details": result,
             "Type": "NINA_API"
         }
@@ -1823,6 +1844,48 @@ async def nina_flip_mount() -> Dict[str, Any]:
     except Exception as e:
         return create_error_response("NINAMountError", str(e))
 
+def pick_filter(available: List[Dict[str, Any]], filter_id: Optional[int], filter_name: Optional[str]) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """The wheel's filter for an id or a name, or why there is none. `available` is the wheel's AvailableFilters."""
+    listing = ", ".join(f"{f.get('Name')} (id {f.get('Id')})" for f in available)
+    if filter_id is not None and filter_name:
+        return None, "Give filter_name or filter_id, not both."
+    if filter_id is None and not filter_name:
+        return None, f"Say which filter: filter_name or filter_id. This wheel has: {listing}."
+    if filter_id is not None:
+        for f in available:
+            if f.get("Id") == filter_id:
+                return f, None
+        return None, f"The wheel has no filter with id {filter_id}. It has: {listing}."
+    wanted = filter_name.strip().lower()
+    for f in available:
+        if str(f.get("Name", "")).lower() == wanted:
+            return f, None
+    close = [f for f in available if wanted and (str(f.get("Name", "")).lower().startswith(wanted) or wanted in str(f.get("Name", "")).lower())]
+    if len(close) == 1:
+        return close[0], None
+    return None, f"The wheel has no filter named '{filter_name}'. It has: {listing}."
+
+
+def resolve_ra_hours(ra: Optional[float], ra_degrees: Optional[float]) -> Tuple[Optional[float], Optional[str]]:
+    """Right Ascension in hours from either argument, or why it cannot be used.
+
+    A value over 24 given as hours is most often degrees, so the message says what it would be in hours."""
+    if ra is not None and ra_degrees is not None:
+        return None, "Give ra (hours) or ra_degrees (degrees), not both."
+    if ra_degrees is not None:
+        if not 0 <= ra_degrees < 360:
+            return None, f"ra_degrees must be between 0 and 360 degrees, not {ra_degrees:g}."
+        return ra_degrees / 15.0, None
+    if ra is None:
+        return None, "Give the Right Ascension: ra in hours (0-24), or ra_degrees in degrees (0-360)."
+    if 0 <= ra <= 24:
+        return ra, None
+    if 24 < ra < 360:
+        return None, (f"ra is in HOURS (0-24) and {ra:g} is out of range. If {ra:g} is degrees, that is {ra / 15:.4f} hours: "
+                      f"use ra={ra / 15:.4f}, or pass ra_degrees={ra:g}.")
+    return None, f"ra is in HOURS and must be between 0 and 24, not {ra:g}."
+
+
 def target_altitude_deg(ra_hours: float, dec_deg: float, latitude_deg: float, sidereal_hours: float) -> float:
     """Altitude above the horizon, in degrees, of a target at the given local sidereal time."""
     hour_angle = math.radians((sidereal_hours - ra_hours) * 15.0)
@@ -1858,7 +1921,8 @@ async def nina_slew_mount(input: MountSlewInput) -> Dict[str, Any]:
     
     Args:
         input: MountSlewInput containing:
-            ra: Right Ascension in hours (0-24)
+            ra: Right Ascension in HOURS (0-24)
+            ra_degrees: Right Ascension in DEGREES (0-360), if you have it in degrees; give this or ra, not both
             dec: Declination in degrees (-90 to +90)
             wait_for_completion: Whether to wait for the slew to complete
     
@@ -1878,12 +1942,10 @@ async def nina_slew_mount(input: MountSlewInput) -> Dict[str, Any]:
             )
 
         # Validate coordinates
-        if not 0 <= input.ra <= 24:
-            return create_error_response(
-                "NINAMountError", 
-                "Right Ascension must be between 0 and 24 hours",
-                {"StatusCode": 400}
-            )
+        ra_hours, ra_problem = resolve_ra_hours(input.ra, input.ra_degrees)
+        if ra_problem:
+            return create_error_response("NINAMountError", ra_problem, {"StatusCode": 400})
+        input.ra = ra_hours
         if not -90 <= input.dec <= 90:
             return create_error_response(
                 "NINAMountError",

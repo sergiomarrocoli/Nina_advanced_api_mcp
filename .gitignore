@@ -2,3 +2,5 @@ __pycache__/
 *.pyc
 nina_advanced_mcp/logs/
 .pytest_cache/
+build/
+*.egg-info/
