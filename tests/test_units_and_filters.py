@@ -17,9 +17,20 @@ def test_degrees_are_converted_to_hours():
     assert problem is None and hours == pytest.approx(0.712)
 
 
-def test_degrees_given_as_hours_say_what_they_would_be_in_hours():
+def test_an_out_of_range_ra_names_both_ways_out_and_does_not_guess():
     hours, problem = m.resolve_ra_hours(42.44, None)
-    assert hours is None and "2.8293" in problem and "ra_degrees=42.44" in problem
+    assert hours is None and "ra_degrees" in problem and "ra_hms" in problem and "2.82" not in problem
+
+
+@pytest.mark.parametrize("text", ["00h 42m 44s", "00:42:44", "0 42 44", "0h42m44s"])
+def test_hours_minutes_seconds_are_read_in_any_common_form(text):
+    hours, problem = m.resolve_ra_hours(None, None, text)
+    assert problem is None and hours == pytest.approx(0.7122, abs=1e-3)
+
+
+@pytest.mark.parametrize("text", ["Andromeda", "25h 00m 00s", "00h 61m 00s", "", "1 2 3 4"])
+def test_something_that_is_not_hours_minutes_seconds_is_refused(text):
+    assert m.resolve_ra_hours(None, None, text)[1]
 
 
 def test_ra_out_of_every_range_is_refused_plainly():
@@ -27,7 +38,7 @@ def test_ra_out_of_every_range_is_refused_plainly():
 
 
 def test_both_or_neither_is_refused():
-    assert "not both" in m.resolve_ra_hours(1.0, 15.0)[1]
+    assert "only one" in m.resolve_ra_hours(1.0, 15.0)[1] and "only one" in m.resolve_ra_hours(1.0, None, "1h")[1]
     assert "Give the Right Ascension" in m.resolve_ra_hours(None, None)[1]
 
 

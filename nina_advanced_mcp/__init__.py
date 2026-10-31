@@ -508,6 +508,7 @@ class MountSlewInput(BaseModel):
     """Input model for mount slew settings"""
     ra: Optional[float] = None  # Right Ascension in hours (0-24)
     ra_degrees: Optional[float] = None  # Right Ascension in degrees (0-360), instead of ra
+    ra_hms: Optional[str] = None  # Right Ascension as hours, minutes, seconds, such as "00h 42m 44s", instead of ra
     dec: float  # Declination in degrees
     wait_for_completion: Optional[bool] = True  # Whether to wait for the slew to complete
 
@@ -1866,24 +1867,40 @@ def pick_filter(available: List[Dict[str, Any]], filter_id: Optional[int], filte
     return None, f"The wheel has no filter named '{filter_name}'. It has: {listing}."
 
 
-def resolve_ra_hours(ra: Optional[float], ra_degrees: Optional[float]) -> Tuple[Optional[float], Optional[str]]:
-    """Right Ascension in hours from either argument, or why it cannot be used.
+def parse_hms(text: str) -> Optional[float]:
+    """Hours from "00h 42m 44s", "00:42:44" or "0 42 44.5" (minutes and seconds optional), or None if it is not that."""
+    parts = re.findall(r"\d+(?:\.\d+)?", text or "")
+    if not 1 <= len(parts) <= 3 or re.search(r"[^\dhms:\s.\u2032\u2033'\"-]", (text or "").lower()):
+        return None
+    hours, minutes, seconds = (float(p) for p in parts + ["0"] * (3 - len(parts)))
+    if minutes >= 60 or seconds >= 60:
+        return None
+    return hours + minutes / 60 + seconds / 3600
 
-    A value over 24 given as hours is most often degrees, so the message says what it would be in hours."""
-    if ra is not None and ra_degrees is not None:
-        return None, "Give ra (hours) or ra_degrees (degrees), not both."
+
+def resolve_ra_hours(ra: Optional[float], ra_degrees: Optional[float], ra_hms: Optional[str] = None) -> Tuple[Optional[float], Optional[str]]:
+    """Right Ascension in hours from whichever argument was given, or why it cannot be used.
+
+    A value over 24 given as hours might be degrees, or the minutes and seconds of "00h 42m 44s" read as one number,
+    so the message names both ways out and does not pick one."""
+    if sum(v is not None for v in (ra, ra_degrees, ra_hms)) > 1:
+        return None, "Give only one of ra (hours), ra_degrees (degrees) or ra_hms (hours, minutes, seconds)."
+    if ra_hms is not None:
+        hours = parse_hms(ra_hms)
+        if hours is None or not 0 <= hours < 24:
+            return None, f"ra_hms '{ra_hms}' is not hours, minutes, seconds such as '00h 42m 44s' (hours 0-23)."
+        return hours, None
     if ra_degrees is not None:
         if not 0 <= ra_degrees < 360:
             return None, f"ra_degrees must be between 0 and 360 degrees, not {ra_degrees:g}."
         return ra_degrees / 15.0, None
     if ra is None:
-        return None, "Give the Right Ascension: ra in hours (0-24), or ra_degrees in degrees (0-360)."
+        return None, "Give the Right Ascension: ra in hours (0-24), ra_degrees in degrees (0-360), or ra_hms as hours, minutes, seconds."
     if 0 <= ra <= 24:
         return ra, None
-    if 24 < ra < 360:
-        return None, (f"ra is in HOURS (0-24) and {ra:g} is out of range. If {ra:g} is degrees, that is {ra / 15:.4f} hours: "
-                      f"use ra={ra / 15:.4f}, or pass ra_degrees={ra:g}.")
-    return None, f"ra is in HOURS and must be between 0 and 24, not {ra:g}."
+    return None, (f"ra is in HOURS (0-24) and {ra:g} is out of range. Check what you have: "
+                  f"if it is degrees, pass ra_degrees; if it is hours, minutes and seconds such as 00h 42m 44s, pass ra_hms='00h 42m 44s' "
+                  f"(a decimal ra would be 0.7122, not 42.44).")
 
 
 def target_altitude_deg(ra_hours: float, dec_deg: float, latitude_deg: float, sidereal_hours: float) -> float:
@@ -1922,7 +1939,8 @@ async def nina_slew_mount(input: MountSlewInput) -> Dict[str, Any]:
     Args:
         input: MountSlewInput containing:
             ra: Right Ascension in HOURS (0-24)
-            ra_degrees: Right Ascension in DEGREES (0-360), if you have it in degrees; give this or ra, not both
+            ra_degrees: Right Ascension in DEGREES (0-360), if you have it in degrees; give one of ra, ra_degrees, ra_hms
+            ra_hms: Right Ascension as hours, minutes and seconds, such as "00h 42m 44s" or "00:42:44"; copy it as given
             dec: Declination in degrees (-90 to +90)
             wait_for_completion: Whether to wait for the slew to complete
     
@@ -1942,7 +1960,7 @@ async def nina_slew_mount(input: MountSlewInput) -> Dict[str, Any]:
             )
 
         # Validate coordinates
-        ra_hours, ra_problem = resolve_ra_hours(input.ra, input.ra_degrees)
+        ra_hours, ra_problem = resolve_ra_hours(input.ra, input.ra_degrees, input.ra_hms)
         if ra_problem:
             return create_error_response("NINAMountError", ra_problem, {"StatusCode": 400})
         input.ra = ra_hours
