@@ -33,6 +33,6 @@ def test_a_tool_with_no_arguments_says_so():
 
 def test_the_server_returns_the_message_instead_of_the_raw_pydantic_error():
     with pytest.raises(ToolError) as caught:
-        asyncio.run(m.mcp.call_tool("nina_capture_image", {"duration": 5, "count": 5}))
+        asyncio.run(m.mcp.call_tool("nina_capture_image", {"duration": 5, "frames": 5}))
     text = str(caught.value)
-    assert "count" in text and "duration" in text and "validation error" not in text
+    assert "frames" in text and "duration" in text and "validation error" not in text
