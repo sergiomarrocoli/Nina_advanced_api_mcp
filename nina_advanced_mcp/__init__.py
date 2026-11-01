@@ -160,6 +160,43 @@ mcp = FastMCP(
     version="0.1.0"
 )
 
+
+# Names a model uses to ask for a number of repeats. No tool here repeats itself, so say how to get that.
+REPEAT_ARGUMENTS = {"count", "frames", "num", "number", "n", "repeat", "repeats", "exposures"}
+
+
+def unknown_argument_message(tool_name: str, schema: Dict[str, Any], arguments: Dict[str, Any]) -> Optional[str]:
+    """Say which arguments a tool has when the call used one it does not, or return None when all are known."""
+    known = list(schema.get("properties", {}))
+    unknown = [name for name in arguments if name not in known]
+    if not unknown:
+        return None
+    have = f"Its arguments are: {', '.join(known)}." if known else f"{tool_name} takes no arguments."
+    message = f"{tool_name} has no argument {', '.join(repr(name) for name in unknown)}. {have}"
+    if REPEAT_ARGUMENTS & set(unknown):
+        message += " It does one thing per call; to repeat it, call it again."
+    return message
+
+
+try:
+    from fastmcp.exceptions import ToolError
+    from fastmcp.server.middleware import Middleware
+
+    class ArgumentErrors(Middleware):
+        """Replace pydantic's unexpected-argument error with one that lists the tool's real arguments."""
+
+        async def on_call_tool(self, context, call_next):
+            name = context.message.name
+            tool = await context.fastmcp_context.fastmcp.get_tool(name) if context.fastmcp_context else None
+            message = unknown_argument_message(name, tool.parameters, context.message.arguments or {}) if tool else None
+            if message:
+                raise ToolError(message)
+            return await call_next(context)
+
+    mcp.add_middleware(ArgumentErrors())
+except ImportError:  # an older FastMCP without middleware keeps its own errors
+    pass
+
 def tool():
     """Register a tool, taking the arguments flat.
 
