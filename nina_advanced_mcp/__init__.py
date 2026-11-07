@@ -44,7 +44,7 @@ import json
 import time
 from datetime import datetime
 import base64
-from typing import Dict, Any, Optional, List, Union, Callable, Literal, Annotated, Tuple
+from typing import Dict, Any, Optional, List, Union, Callable, Literal, Annotated, Tuple, Iterable
 from fastmcp import FastMCP
 from pydantic import BaseModel, Field
 from enum import Enum
@@ -159,6 +159,72 @@ mcp = FastMCP(
     instructions="Model Context Provider for N.I.N.A. astrophotography software using Advanced API",
     version="0.1.0"
 )
+
+
+# Tool profiles. By default every tool is listed. Setting NINA_MCP_PROFILE (or calling apply_profile) lists only a
+# subset, which cuts the tokens each model turn spends on the tool list. docs/tools.md shows the same split.
+#   core: connecting, guiding, cooling, slewing, focusing and capturing.
+#   mono: core plus the filter wheel.
+ENV_PROFILE = "NINA_MCP_PROFILE"
+PROFILES = {
+    "core": {
+        "nina_connect",
+        "nina_disconnect",
+        "nina_get_status",
+        "nina_connect_camera",
+        "nina_disconnect_camera",
+        "nina_get_camera_info",
+        "nina_capture_image",
+        "nina_abort_exposure",
+        "nina_start_cooling",
+        "nina_stop_cooling",
+        "nina_start_warming",
+        "nina_get_image",
+        "nina_connect_mount",
+        "nina_disconnect_mount",
+        "nina_get_mount_info",
+        "nina_slew_mount",
+        "nina_stop_slew",
+        "nina_sync_mount",
+        "nina_park_mount",
+        "nina_unpark_mount",
+        "nina_connect_focuser",
+        "nina_disconnect_focuser",
+        "nina_get_focuser_info",
+        "nina_move_focuser",
+        "nina_connect_filterwheel",
+        "nina_disconnect_filterwheel",
+        "nina_connect_guider",
+        "nina_disconnect_guider",
+        "nina_get_guider_info",
+        "nina_start_guiding",
+        "nina_stop_guiding",
+        "nina_calibrate_guider",
+        "nina_clear_guider_calibration",
+        "nina_get_guider_graph",
+    },
+    "mono": {"nina_get_filterwheel_info", "nina_get_filter_info", "nina_change_filter"},
+}
+
+
+def apply_profile(name: Optional[str], extra: Iterable[str] = ()) -> None:
+    """List only the tools in the named profile ("core", "mono"), or all of them ("full", None, "").
+
+    `extra` names tools to keep as well; a caller that registers its own tools after this module loads passes them.
+    Call it once, after every tool is registered. A hidden tool cannot be called.
+    """
+    name = (name or "full").strip().lower()
+    choices = sorted(["full", *PROFILES])
+    if name not in choices:
+        raise ValueError(f"Unknown tool profile '{name}'. Choose one of: {', '.join(choices)}.")
+    mcp.enable(components={"tool"})
+    if name == "full":
+        return
+    keep = set(PROFILES["core"]) | set(extra)
+    if name == "mono":
+        keep |= PROFILES["mono"]
+    mcp.disable(components={"tool"})
+    mcp.enable(names=keep, components={"tool"})
 
 
 # Names a model uses to ask for a number of repeats. No tool here repeats itself, so say how to get that.
@@ -5148,5 +5214,8 @@ if __name__ == "__main__":
     logger.info(f"LOG_LEVEL: {LOG_LEVEL}")
     logger.info(f"IMAGE_SAVE_DIR: {IMAGE_SAVE_DIR}")
     
+    apply_profile(os.getenv(ENV_PROFILE))
+    logger.info(f"{ENV_PROFILE}: {os.getenv(ENV_PROFILE) or 'full'}")
+
     # Run the FastMCP server
     mcp.run() 
