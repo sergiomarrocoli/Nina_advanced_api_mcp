@@ -491,6 +491,9 @@ class ImageHistoryInput(BaseModel):
     imageType: Optional[str] = None  # Filter by image type (LIGHT, FLAT, DARK, BIAS, SNAPSHOT)
     count: Optional[bool] = None  # Whether to count the number of images
 
+MAX_CAPTURE_COUNT = 20  # a longer run would outlast the time a client waits for one call
+
+
 class CameraCaptureInput(BaseModel):
     """Input model for camera capture settings.
     
@@ -516,7 +519,9 @@ class CameraCaptureInput(BaseModel):
         quality: When downloading, image quality (1-100 for JPEG, -1 for PNG)
         size: When downloading and resizing, target size (e.g. "1920x1080")
         solve: Whether to plate solve the image
+        count: How many exposures to take, one after another (default 1)
     """
+    count: int = Field(default=1, ge=1, le=MAX_CAPTURE_COUNT, description=f"How many exposures to take, one after another (1 to {MAX_CAPTURE_COUNT}, default 1)")
     duration: Optional[float] = None  # The duration of the exposure in seconds
     gain: Optional[int] = None  # Camera gain setting
     download: bool = False  # Whether to wait for and return the image data
@@ -1276,7 +1281,38 @@ async def _capture_and_confirm(client: "NinaAPIClient", endpoint: str, timeout: 
 
 @tool()
 async def nina_capture_image(input: CameraCaptureInput) -> Dict[str, Any]:
-    """Capture an image with NINA astronomy software.
+    """Capture one or more images with NINA astronomy software.
+
+    `count` repeats the exposure that many times, one after another, and stops at the first failure. With the
+    default count of 1 the result is that single capture; with more it lists every frame's result under `Frames`.
+
+    Each capture provides two modes of operation:
+    1. Download mode (input.download=True):
+       - Waits for the capture to complete
+       - Saves the image to disk and returns the file path
+       - Can resize and compress the image for preview
+       - Supports JPEG (quality 1-100) or PNG (quality=-1) format
+       - Image is also saved by NINA in full resolution
+
+    2. Save-only mode (input.download=False):
+       - Waits for the capture to complete and for the image to appear in NINA's image history
+       - Retries a capture that saved nothing (up to 3 attempts in all) and returns an error if it still fails
+       - Image is saved by NINA in full resolution; nothing is downloaded
+    """
+    if input.count == 1:
+        return await _capture_one(input)
+    frames = []
+    for number in range(1, input.count + 1):
+        frame = await _capture_one(input)
+        frames.append(frame)
+        if not frame.get("Success", False):
+            return {"Success": False, "Error": f"Frame {number} of {input.count} failed after {number - 1} were taken: {frame.get('Error')}",
+                    "Frames": frames, "Type": "NINA_API"}
+    return {"Success": True, "Message": f"{input.count} images captured successfully", "Frames": frames, "Type": "NINA_API"}
+
+
+async def _capture_one(input: CameraCaptureInput) -> Dict[str, Any]:
+    """Capture one image with NINA astronomy software.
     
     This function provides two modes of operation:
     1. Download mode (input.download=True):
