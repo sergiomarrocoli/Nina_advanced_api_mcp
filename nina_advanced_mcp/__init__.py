@@ -45,7 +45,7 @@ import time
 from datetime import datetime
 import base64
 from typing import Dict, Any, Optional, List, Union, Callable, Literal, Annotated, Tuple, Iterable
-from fastmcp import FastMCP
+from fastmcp import Context, FastMCP
 from pydantic import BaseModel, Field
 from enum import Enum
 import aiohttp
@@ -221,12 +221,97 @@ def apply_profile(name: Optional[str], extra: Iterable[str] = ()) -> None:
         raise ValueError(f"Unknown tool profile '{name}'. Choose one of: {', '.join(choices)}.")
     mcp.enable(components={"tool"})
     if name == "full":
+        mcp.disable(names=set(DISCOVERY_TOOLS), components={"tool"})  # nothing is hidden, so nothing to discover
         return
-    keep = set(PROFILES["core"]) | set(extra)
+    keep = set(PROFILES["core"]) | set(extra) | set(DISCOVERY_TOOLS)
     if name == "mono":
         keep |= PROFILES["mono"]
     mcp.disable(components={"tool"})
     mcp.enable(names=keep, components={"tool"})
+
+
+# Tool groups, one per device, for finding tools a profile leaves out. docs/tools.md has the same split.
+GROUPS = {
+    "connection": (
+        "connect and disconnect, status, version, plugins, time, help",
+        ("nina_connect", "nina_disconnect", "nina_get_status", "nina_get_version", "nina_get_plugins", "nina_time_now", "nina_help", "nina_switch_tab", "nina_get_screenshot",),
+    ),
+    "camera": (
+        "camera settings, cooling, readout, binning, device list",
+        ("nina_connect_camera", "nina_disconnect_camera", "nina_list_camera_devices", "nina_get_camera_info", "nina_capture_image", "nina_abort_exposure", "nina_get_capture_statistics", "nina_start_cooling", "nina_stop_cooling", "nina_start_warming", "nina_set_binning", "nina_set_readout_mode",),
+    ),
+    "images": (
+        "image history, image parameters, capture statistics",
+        ("nina_get_image", "nina_get_image_history", "nina_get_image_thumbnail", "nina_get_image_parameter", "nina_get_image_parameters", "nina_set_image_parameter", "nina_reset_image_parameters",),
+    ),
+    "mount": (
+        "slewing, tracking, parking, flipping, centring",
+        ("nina_connect_mount", "nina_disconnect_mount", "nina_list_mount_devices", "nina_rescan_mount_devices", "nina_get_mount_info", "nina_slew_mount", "nina_stop_slew", "nina_sync_mount", "nina_flip_mount", "nina_park_mount", "nina_unpark_mount", "nina_home_mount", "nina_set_park_position", "nina_set_tracking_mode", "nina_center_mount",),
+    ),
+    "focuser": (
+        "focuser position and autofocus",
+        ("nina_connect_focuser", "nina_disconnect_focuser", "nina_list_focuser_devices", "nina_rescan_focuser_devices", "nina_get_focuser_info", "nina_move_focuser", "nina_set_focuser_temperature", "nina_autofocus",),
+    ),
+    "filterwheel": (
+        "filter wheel info and filter changes",
+        ("nina_connect_filterwheel", "nina_disconnect_filterwheel", "nina_list_filterwheel_devices", "nina_rescan_filterwheel_devices", "nina_get_filterwheel_info", "nina_get_filter_info", "nina_change_filter",),
+    ),
+    "guider": (
+        "PHD2 guiding",
+        ("nina_connect_guider", "nina_disconnect_guider", "nina_list_guider_devices", "nina_rescan_guider_devices", "nina_get_guider_info", "nina_start_guiding", "nina_stop_guiding", "nina_calibrate_guider", "nina_clear_guider_calibration", "nina_get_guider_graph",),
+    ),
+    "rotator": (
+        "rotator position and sync",
+        ("nina_connect_rotator", "nina_disconnect_rotator", "nina_list_rotator_devices", "nina_rescan_rotator_devices", "nina_get_rotator_info", "nina_move_rotator", "nina_halt_rotator", "nina_sync_rotator", "nina_set_rotator_reverse",),
+    ),
+    "flats": (
+        "flat panel, sky flats and flat sequences",
+        ("nina_connect_flatpanel", "nina_disconnect_flatpanel", "nina_list_flatpanel_devices", "nina_rescan_flatpanel_devices", "nina_get_flatpanel_info", "nina_set_flatpanel_brightness", "nina_set_flatpanel_cover", "nina_set_flatpanel_light", "nina_start_flats", "nina_stop_flats", "nina_sky_flats", "nina_get_flats_status", "nina_get_flats_progress",),
+    ),
+    "dome": (
+        "dome, shutter, slaving",
+        ("nina_connect_dome", "nina_disconnect_dome", "nina_list_dome_devices", "nina_rescan_dome_devices", "nina_get_dome_info", "nina_slew_dome", "nina_park_dome", "nina_home_dome", "nina_stop_dome_movement", "nina_open_dome_shutter", "nina_close_dome_shutter", "nina_set_dome_follow", "nina_sync_dome_to_telescope", "nina_set_dome_park_position",),
+    ),
+    "other": (
+        "dew heater, wait",
+        ("nina_control_dew_heater", "nina_wait",),
+    ),
+}
+
+DISCOVERY_TOOLS = ("nina_list_tool_groups", "nina_enable_tools")  # listed whenever a profile hides something
+
+
+@mcp.tool()
+async def nina_list_tool_groups() -> Dict[str, Any]:
+    """List the groups of NINA tools that are not available yet, so that nina_enable_tools can add one.
+
+    Only needed when the tool list lacks something (for example the dome, a rotator or flat-panel tools).
+    """
+    return {"Success": True, "Type": "NINA_API", "Groups": [
+        {"group": name, "description": description, "tools": list(tools)} for name, (description, tools) in GROUPS.items()
+    ], "Message": "Call nina_enable_tools with a group name to make its tools available."}
+
+
+@mcp.tool()
+async def nina_enable_tools(group: str, ctx: Context) -> Dict[str, Any]:
+    """Make the tools of one group available (see nina_list_tool_groups). They appear in the tool list straight away (the server's list changes, not only this client's).
+
+    Args:
+        group: A group name from nina_list_tool_groups, such as "dome" or "rotator"
+    """
+    group = group.strip().lower()
+    if group not in GROUPS:
+        return create_error_response("InvalidParameter", f"Unknown tool group '{group}'. Groups: {', '.join(GROUPS)}.", {"StatusCode": 400})
+    tools = GROUPS[group][1]
+    # Server-wide, not per session: FastMCP's session-scoped enable does not outlast the request. Over stdio the
+    # server has one client, so the two are the same.
+    mcp.enable(names=set(tools), components={"tool"})
+    try:
+        from mcp.types import ToolListChangedNotification
+        await ctx.send_notification(ToolListChangedNotification())  # clients that watch the list refresh it
+    except Exception as e:  # a client that does not listen is no worse off; it lists the tools again
+        logger.debug(f"Could not send the tool list change: {e}")
+    return {"Success": True, "Type": "NINA_API", "Message": f"Enabled {len(tools)} {group} tools.", "Enabled": list(tools)}
 
 
 # Names a model uses to ask for a number of repeats. No tool here repeats itself, so say how to get that.
