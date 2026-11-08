@@ -20,7 +20,7 @@ def listed():
 
 def test_the_full_profile_lists_every_tool():
     m.apply_profile("full")
-    assert len(listed()) == 104
+    assert len(listed()) == 106
 
 
 def test_core_lists_only_the_core_tools():

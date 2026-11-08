@@ -202,6 +202,8 @@ PROFILES = {
         "nina_calibrate_guider",
         "nina_clear_guider_calibration",
         "nina_get_guider_graph",
+        "nina_autofocus",
+        "nina_center_mount",
     },
     "mono": {"nina_get_filterwheel_info", "nina_get_filter_info", "nina_change_filter"},
 }
@@ -2745,41 +2747,33 @@ async def nina_home_dome() -> Dict[str, Any]:
     except Exception as e:
         return create_error_response("NINADomeError", str(e))
 
+WAIT_MAX_S = 300  # the longest wait any model has made and finished (qwen, in the benchmark's longest task)
+_sleep = asyncio.sleep  # a name the tests can replace
+
+
 @tool()
 async def nina_wait(seconds: float) -> Dict[str, Any]:
-    """Wait for a specified duration in seconds.
-    
+    """Wait for a specified duration in seconds, at most 300.
+
+    Upstream waits for as long as it is asked: one model sat in it for over 15 minutes and held up everything
+    behind it. A longer request is shortened, and the reply says so. What was asked for and what was waited both
+    come back in Details.
+
     Args:
-        seconds: Duration to wait in seconds (can be fractional)
-        
+        seconds: Duration to wait in seconds (can be fractional), up to 300
+
     Returns:
-        Dict containing:
-        - Success status
-        - Message about the wait operation
-        - Type of response
+        Dict containing the success status, a message, and the requested and waited seconds.
     """
-    try:
-        if seconds < 0:
-            return create_error_response(
-                "InvalidParameter",
-                "Wait duration cannot be negative",
-                {"StatusCode": 400}
-            )
-            
-        logger.info(f"Waiting for {seconds} seconds...")
-        await asyncio.sleep(seconds)
-        
-        return {
-            "Success": True,
-            "Message": f"Waited for {seconds} seconds",
-            "Type": "NINA_API"
-        }
-    except Exception as e:
-        return create_error_response(
-            "WaitError",
-            str(e),
-            {"StatusCode": 500}
-        )
+    if seconds < 0:
+        return create_error_response("InvalidParameter", "Wait duration cannot be negative", {"StatusCode": 400})
+    waited = min(seconds, WAIT_MAX_S)
+    logger.info(f"Waiting for {waited} seconds...")
+    await _sleep(waited)
+    message = f"Waited for {waited:g} seconds"
+    if waited < seconds:
+        message += f" (you asked for {seconds:g}; the longest wait is {WAIT_MAX_S} seconds)"
+    return {"Success": True, "Message": message, "Details": {"requested_seconds": seconds, "waited_seconds": waited}, "Type": "NINA_API"}
 
 @tool()
 async def nina_connect(input: ConnectInput) -> Dict[str, Any]:
@@ -5195,6 +5189,10 @@ async def nina_help(input: HelpInput) -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"Error in nina_help: {str(e)}")
         return create_error_response("NINAHelpError", str(e))
+
+# Autofocus and centre-on-target; they use the helpers above, so they are registered last.
+from nina_advanced_mcp import extras  # noqa: E402,F401
+
 
 if __name__ == "__main__":
     import signal

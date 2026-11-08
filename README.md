@@ -95,14 +95,14 @@ Add to your AI agent's MCP configuration:
 
 #### Tool profiles
 
-By default the server lists all 104 tools, about 12,000 tokens of tool descriptions on every model turn. Set
+By default the server lists all 106 tools, about 12,000 tokens of tool descriptions on every model turn. Set
 `NINA_MCP_PROFILE` to list fewer:
 
 | Profile | Tools | Tool list (approx.) | For |
 |---|---|---|---|
-| `full` (default) | 104 | 12,000 tokens | everything |
-| `mono` | 37 | 4,500 tokens | `core` plus the filter wheel |
-| `core` | 34 | 4,200 tokens | connecting, guiding, cooling, slewing, focusing, capturing |
+| `full` (default) | 106 | 12,000 tokens | everything |
+| `mono` | 39 | 4,500 tokens | `core` plus the filter wheel |
+| `core` | 36 | 4,200 tokens | connecting, guiding, cooling, slewing, focusing, capturing |
 
 A tool outside the profile is not listed and cannot be called. [docs/tools.md](docs/tools.md) shows which tools are in which.
 
