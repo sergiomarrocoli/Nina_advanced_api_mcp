@@ -192,8 +192,6 @@ PROFILES = {
         "nina_disconnect_focuser",
         "nina_get_focuser_info",
         "nina_move_focuser",
-        "nina_connect_filterwheel",
-        "nina_disconnect_filterwheel",
         "nina_connect_guider",
         "nina_disconnect_guider",
         "nina_get_guider_info",
@@ -205,7 +203,7 @@ PROFILES = {
         "nina_autofocus",
         "nina_center_mount",
     },
-    "mono": {"nina_get_filterwheel_info", "nina_get_filter_info", "nina_change_filter"},
+    "mono": {"nina_connect_filterwheel", "nina_disconnect_filterwheel", "nina_get_filterwheel_info", "nina_get_filter_info", "nina_change_filter"},
 }
 
 

@@ -63,3 +63,8 @@ def test_tools_md_agrees_with_the_profiles():
     rows = re.findall(r"\| `(\w+)` \| (core|mono) \|", (Path(__file__).parent.parent / "docs" / "tools.md").read_text())
     assert {n for n, p in rows if p == "core"} == m.PROFILES["core"]
     assert {n for n, p in rows if p == "mono"} == m.PROFILES["mono"]
+
+
+def test_core_has_no_filter_wheel_tools():
+    from nina_advanced_mcp import PROFILES
+    assert not [n for n in PROFILES["core"] if "filter" in n]

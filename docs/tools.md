@@ -63,8 +63,8 @@ Every MCP tool the server exposes, grouped by device. **core** and **mono** show
 | `nina_move_focuser` | core |
 | `nina_set_focuser_temperature` |  |
 | **Filter wheel** | |
-| `nina_connect_filterwheel` | core |
-| `nina_disconnect_filterwheel` | core |
+| `nina_connect_filterwheel` | mono |
+| `nina_disconnect_filterwheel` | mono |
 | `nina_list_filterwheel_devices` |  |
 | `nina_rescan_filterwheel_devices` |  |
 | `nina_get_filterwheel_info` | mono |
