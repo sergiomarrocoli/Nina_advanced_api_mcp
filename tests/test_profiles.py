@@ -25,12 +25,12 @@ def test_the_full_profile_lists_every_tool():
 
 def test_core_lists_only_the_core_tools():
     m.apply_profile("core")
-    assert listed() == m.PROFILES["core"]
+    assert listed() == m.PROFILES["core"] | set(m.DISCOVERY_TOOLS)
 
 
 def test_mono_is_core_plus_the_filter_wheel():
     m.apply_profile("mono")
-    assert listed() == m.PROFILES["core"] | {"nina_get_filterwheel_info", "nina_get_filter_info", "nina_change_filter"}
+    assert listed() == m.PROFILES["core"] | m.PROFILES["mono"] | set(m.DISCOVERY_TOOLS)
 
 
 def test_every_profile_tool_exists():

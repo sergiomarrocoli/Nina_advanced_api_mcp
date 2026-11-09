@@ -104,7 +104,10 @@ By default the server lists all 106 tools, about 12,000 tokens of tool descripti
 | `mono` | 39 | 4,500 tokens | `core` plus the filter wheel |
 | `core` | 36 | 4,200 tokens | connecting, guiding, cooling, slewing, focusing, capturing |
 
-A tool outside the profile is not listed and cannot be called. [docs/tools.md](docs/tools.md) shows which tools are in which.
+A tool outside the profile is not listed and cannot be called. With a profile set, two extra tools are listed:
+`nina_list_tool_groups` shows the hidden groups (camera, dome, rotator, flats and so on) and `nina_enable_tools` adds one
+group's tools to the list, and sends the client a tool-list-changed notice. The change applies to the whole server, which over
+stdio has one client. [docs/tools.md](docs/tools.md) shows which tools are in which.
 
 ## 📚 Usage
 
