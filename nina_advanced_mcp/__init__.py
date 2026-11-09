@@ -1667,58 +1667,6 @@ async def nina_get_capture_statistics() -> Dict[str, Any]:
     except Exception as e:
         return create_error_response("NINACameraError", str(e))
 
-@tool()
-async def nina_get_image_history(input: ImageHistoryInput) -> Dict[str, Any]:
-    """Get image history from NINA astronomy software.
-    
-    Args:
-        input: ImageHistoryInput containing:
-            limit: Optional limit to number of images to return
-            offset: Optional offset for pagination
-            all: Whether to get all images or only the current image (defaults to True)
-    
-    Returns:
-        Dict containing:
-        - Success status
-        - Message about the operation
-        - Image history
-        - Type of response
-    """
-    try:
-        client = await get_client()
-        if not client._connected:
-            return create_error_response(
-                "NINAImageError",
-                "Not connected to NINA server. Please connect first using nina_connect.",
-                {"StatusCode": 401}
-            )
-
-        # Build query parameters
-        params = []
-        params.append(f"all={str(input.all).lower()}")
-        
-        if input.limit is not None:
-            params.append(f"limit={input.limit}")
-        if input.offset is not None:
-            params.append(f"offset={input.offset}")
-        if input.imageType is not None:
-            params.append(f"imageType={input.imageType}")
-        if input.count is not None:
-            params.append(f"count={str(input.count).lower()}")
-
-        endpoint = "image-history"
-        if params:
-            endpoint += "?" + "&".join(params)
-
-        result = await client._send_request("GET", endpoint)
-        return {
-            "Success": True,
-            "Message": "Image history retrieved successfully",
-            "Details": result.get("Response", {}),
-            "Type": "NINA_API"
-        }
-    except Exception as e:
-        return create_error_response("NINAImageError", str(e))
 
 # Mount Tools
 @tool()
