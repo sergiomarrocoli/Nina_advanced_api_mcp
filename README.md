@@ -152,6 +152,33 @@ stdio has one client. [docs/tools.md](docs/tools.md) shows which tools are in wh
 - Error management
 - Configuration
 
+## 📈 Measured improvements
+
+Most changes in this fork came from running language models against the server in the
+[NINA MCP benchmark](https://github.com/sergiomarrocoli/NINA-MCP-model-benchmarking) (simulated equipment, 17 tasks, logged and scored runs),
+reading where they failed, and fixing the tool. The method, run logs and charts are in that repo. The numbers below are passes out of
+5 runs unless stated; the "before" is the server this fork started from (v1).
+
+| Change | Model | Task | Before | After |
+|---|---|---|---|---|
+| RA units (`ra`, `ra_degrees`, `ra_hms`) and filter names | qwen3:8b | Change filter to Red | 0/5 | 5/5 |
+| Clearer argument errors and a `count` argument on `nina_capture_image` | qwen3:8b | M31 session | 0/5 | 3/5 |
+| The same, plus the units fix | qwen3:8b | Pointing offset | 1/8 | 5/5 |
+| Below-horizon refusal in `nina_slew_mount` | qwen3:8b, deepseek-chat, DeepSeek V4 Pro, gpt-4.1, Claude Haiku 5.5 | Slew to a target that never rises | 0/5 each | 5/5 each |
+
+What the changes were and why: [units, errors and count](https://github.com/sergiomarrocoli/NINA-MCP-model-benchmarking/blob/main/docs/units-and-capture.md),
+[the horizon check](https://github.com/sergiomarrocoli/NINA-MCP-model-benchmarking/blob/main/docs/horizon-check.md).
+
+**Tool profiles do not change accuracy.** Trimming the tool list from about 12,000 tokens to about 4,500 (`mono`) or 4,100 (`core`) gave
+the same pass rate as the full list on qwen3:8b: `full` and `mono` each passed 36 runs (3 per task, 16 tasks), and `core` passed 27 of 30 on its easier, filter-free subset. The saving is
+cost and speed. [Details](https://github.com/sergiomarrocoli/NINA-MCP-model-benchmarking/blob/main/docs/tool-profiles.md).
+
+**Read these with care.**
+- Mostly one small local model, small samples (5 runs per cell), and the simulator sometimes drops a device mid-run.
+- The `count` argument makes the tool easier for weak models, so results with it are not comparable to the v1 numbers.
+- The below-horizon refusal shows a server-side check works where model judgement does not. The models did not get better; the tool decided.
+- Not yet measured: the centring-failure message, autofocus and centre-on-target tools, and tool discovery.
+
 ## 🤝 Contributing
 
 Contributions are welcome! Please read our [Contributing Guidelines](CONTRIBUTING.md) first.
