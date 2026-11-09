@@ -170,7 +170,7 @@ What the changes were and why: [units, errors and count](https://github.com/serg
 [the horizon check](https://github.com/sergiomarrocoli/NINA-MCP-model-benchmarking/blob/main/docs/horizon-check.md).
 
 **Tool profiles do not change accuracy.** Trimming the tool list from about 12,000 tokens to about 4,500 (`mono`) or 4,100 (`core`) gave
-the same pass rate as the full list on qwen3:8b: 36 of 45 valid runs on `full` and on `mono`, 27 of 30 on `core` (its easier subset). The saving is
+the same pass rate as the full list on qwen3:8b: `full` and `mono` each passed 36 runs (3 per task, 16 tasks), and `core` passed 27 of 30 on its easier, filter-free subset. The saving is
 cost and speed. [Details](https://github.com/sergiomarrocoli/NINA-MCP-model-benchmarking/blob/main/docs/tool-profiles.md).
 
 **Read these with care.**
