@@ -48,6 +48,22 @@ async def _degrees_from_target(ra_deg: float, dec_deg: float) -> float | None:
     return separation_deg(info["RightAscension"] * 15, info["Declination"], target_ra, target_dec)
 
 
+async def _centring_failed(reason: str, ra_hours: float, dec: float) -> dict[str, Any]:
+    """The error for a centre that did not work, saying so outright and how far off the mount is.
+
+    Models took photos after the old "Timed out waiting for NINA to finish; the operation may still be running",
+    which does not say the centre failed.
+    """
+    try:
+        off = await _degrees_from_target(ra_hours * 15, dec)
+    except Exception:
+        off = None
+    where = f" The mount is {off:.1f}° from the target." if off is not None else ""
+    message = (f"Centring failed: {reason}.{where} The target is NOT centred, so do not take images of it as if it were. "
+               "Plate solving is probably not working (the camera may be out of focus, or the sky cloudy).")
+    return create_error_response("NINAMountError", message, {"CentringFailed": True, "DegreesFromTarget": off})
+
+
 class AutofocusInput(BaseModel):
     cancel: bool = Field(default=False, description="Cancel a running autofocus instead of starting one")
     wait_for_completion: bool = Field(default=True, description="Wait for the autofocus to finish and return its result")
@@ -147,17 +163,25 @@ async def nina_center_mount(input: CenterMountInput) -> dict[str, Any]:
             return create_error_response("NINAMountError", f"Not slewing: {reason}", {"StatusCode": 400})
         params = {"ra": input.ra * 15, "dec": input.dec, "center": "true",
                   "waitForResult": str(input.wait_for_completion).lower()}
-        result = await _get("equipment/mount/slew", params, timeout=CENTER_TIMEOUT_S)
+        try:
+            result = await _get("equipment/mount/slew", params, timeout=CENTER_TIMEOUT_S)
+        except TimeoutError as e:
+            return await _centring_failed(_describe(e), input.ra, input.dec)
         if result.get("Success"):
             return {"Success": True, "Message": f"Mount slew and centre: {result.get('Response')}", "Details": result, "Type": "NINA_API"}
         if input.wait_for_completion:
             # The plugin reports "Slew failed" for a centre that worked: it checks a status NINA only
             # sets when it runs the instruction itself. So judge by where the mount ended up.
-            off = await _degrees_from_target(input.ra * 15, input.dec)
+            try:
+                off = await _degrees_from_target(input.ra * 15, input.dec)
+            except Exception:
+                off = None  # the mount cannot be read, so the failure stands
             if off is not None and off <= CENTERED_WITHIN_DEG:
                 return {"Success": True,
                         "Message": f"Mount is centred on the target ({off:.3f}° away). The plugin reported '{result.get('Response')}' but the mount position confirms the centre.",
                         "Details": result, "Type": "NINA_API"}
+        if input.wait_for_completion:
+            return await _centring_failed(result.get("Error") or str(result.get("Response")), input.ra, input.dec)
         return create_error_response("NINAMountError", result.get("Error") or str(result.get("Response")), result)
     except Exception as e:
         return create_error_response("NINAMountError", _describe(e), {})

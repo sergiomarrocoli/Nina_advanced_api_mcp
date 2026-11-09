@@ -372,3 +372,36 @@ def test_centre_takes_ra_as_hours_minutes_seconds(monkeypatch):
     if hasattr(nina_advanced_mcp, "resolve_ra_hours"):  # only a server with the fork's change understands it
         assert float(seen["ra"]) == pytest.approx(10.68, abs=0.01)
 
+
+
+def test_a_failed_centre_says_centring_failed_and_how_far_off_the_mount_is(monkeypatch):
+    async def slew(request):
+        return web.json_response(FAILED)
+
+    result = run_against({"equipment/mount/slew": slew, "equipment/mount/info": mount_info(5.0, -5.0)}, monkeypatch,
+                         lambda c: tool(c, "nina_center_mount", {"ra": 0.712, "dec": 41.27}))
+    assert not result["Success"] and result["Error"].startswith("Centring failed:")
+    assert "NOT centred" in result["Error"] and "° from the target" in result["Error"]
+    assert result["ErrorDetails"]["CentringFailed"] is True
+
+
+def test_a_centre_that_times_out_says_centring_failed(monkeypatch):
+    import asyncio as aio
+
+    async def slew(request):
+        await aio.sleep(5)
+        return web.json_response(ok())
+
+    monkeypatch.setattr(extra_tools, "CENTER_TIMEOUT_S", 0.2)
+    result = run_against({"equipment/mount/slew": slew, "equipment/mount/info": mount_info(5.0, -5.0)}, monkeypatch,
+                         lambda c: tool(c, "nina_center_mount", {"ra": 1, "dec": 2}))
+    assert result["Error"].startswith("Centring failed: Timed out") and result["ErrorDetails"]["CentringFailed"]
+
+
+def test_a_failed_centre_still_reads_when_the_mount_cannot_be_read(monkeypatch):
+    async def slew(request):
+        return web.json_response(FAILED)
+
+    result = run_against({"equipment/mount/slew": slew}, monkeypatch,
+                         lambda c: tool(c, "nina_center_mount", {"ra": 0.712, "dec": 41.27}))
+    assert result["Error"].startswith("Centring failed:") and "° from the target" not in result["Error"]
